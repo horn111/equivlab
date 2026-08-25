@@ -26,7 +26,7 @@ a security guarantee.
 | GitHub repository | <https://github.com/horn111/equivlab> |
 | Published reference-fixture commit | `aef703943cef6a6d9c3f65545072711d78d44417` |
 | Release/deployment commit (40 characters) | PENDING |
-| License selected by repository owner | PENDING |
+| License selected by repository owner | [MIT](../LICENSE) |
 | Vercel production URL | PENDING |
 | GenLayer network | `testnetBradbury` (target, not yet evidence) |
 | Registry contract address | PENDING |

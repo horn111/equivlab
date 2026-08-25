@@ -83,3 +83,7 @@ normalization to LF, and insertion of a final LF when one is absent. The CLI
 prints key-sorted JSON; arrays with consensus-relevant rule IDs and findings
 are also sorted. `report_sha256` hashes the compact, key-sorted report before
 that hash field is added.
+
+## License
+
+[MIT](LICENSE)
