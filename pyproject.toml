@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "equivlab"
+version = "0.1.0"
+description = "Deterministic consensus-safety baseline checks for GenLayer Intelligent Contracts"
+requires-python = ">=3.11"
+
+[project.scripts]
+equivlab = "equivlab.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "analyzer"}
+
+[tool.setuptools.packages.find]
+where = ["analyzer"]
+
+[tool.pytest.ini_options]
+pythonpath = ["analyzer"]
+testpaths = ["tests"]
+addopts = "-q"

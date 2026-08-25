@@ -1,0 +1,212 @@
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import backdooredTipJar from '../../fixtures/backdoored_tip_jar/contract.py?raw'
+import App, { canonicalizeSource, pinnedSourceUrl, reportSha256, sourceSha256 } from './App'
+import type { AnalyzeResponse, AuditReport } from './types'
+
+const IMPLEMENTED_RULES = [
+  'AUTH-01', 'BOUND-01', 'CONS-01', 'EVID-01', 'PROMPT-01', 'REPLAY-01',
+  'RESULT-01', 'SRC-01', 'STATE-01', 'TIME-01', 'URL-01', 'VALUE-01',
+]
+const TIP_JAR_URL = 'https://raw.githubusercontent.com/equivlab/demo/0123456789abcdef0123456789abcdef01234567/fixtures/backdoored_tip_jar/contract.py'
+
+async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<AnalyzeResponse> {
+  const base: AuditReport = {
+    failed_rules: ['AUTH-01', 'VALUE-01'],
+    findings: [
+      {
+        evidence: [{ detail: 'Unguarded transfer path: withdraw_to', line: 23, symbol: 'TipJar.withdraw_to' }],
+        rule: 'AUTH-01',
+        severity: 'CRITICAL',
+        status: 'FAIL',
+        summary: 'A public value-transfer path has no preceding caller-derived authority guard.',
+      },
+      {
+        evidence: [{ detail: 'unguarded transfer recipient depends on caller input', line: 25, symbol: 'TipJar.withdraw_to' }],
+        rule: 'VALUE-01',
+        severity: 'CRITICAL',
+        status: 'FAIL',
+        summary: 'A public transfer path lets caller input control material value-transfer fields.',
+      },
+    ],
+    implemented_rules: IMPLEMENTED_RULES,
+    policy: 'gl-consensus-baseline-1',
+    report_sha256: '0'.repeat(64),
+    schema: 'equivlab-report-v1',
+    severity: 'CRITICAL',
+    scope: 'Twelve deterministic rule cores only.',
+    source: { canonical_sha256: await sourceSha256(backdooredTipJar), url: TIP_JAR_URL },
+    status: 'FAIL',
+    unverifiable_rules: [],
+    warning_rules: [],
+  }
+  const report: AuditReport = {
+    ...base,
+    ...overrides,
+    source: { ...base.source, ...overrides.source },
+  }
+  report.report_sha256 = await reportSha256(report)
+  return { source_mode: 'submitted', report }
+}
+
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  localStorage.clear()
+  window.history.replaceState(null, '', '/')
+})
+
+describe('source identity helpers', () => {
+  it('normalizes BOM, newlines, and the final newline', () => {
+    expect(canonicalizeSource('\ufeffa\r\nb\rc')).toBe('a\nb\nc\n')
+  })
+
+  it('builds an exact raw GitHub URL from repository coordinates', () => {
+    expect(pinnedSourceUrl({ repository: 'https://github.com/acme/contracts.git', commit: '1'.repeat(40), path: '/src/contract.py' }))
+      .toBe(`https://raw.githubusercontent.com/acme/contracts/${'1'.repeat(40)}/src/contract.py`)
+  })
+})
+
+describe('Phase 4 workbench', () => {
+  it('shows rail selection feedback in the visible rule spectrum before analysis', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByTitle('Inspect CONS-01'))
+    const focus = screen.getByRole('status', { name: 'Selected rule' })
+    expect(within(focus).getByText('CONS-01')).toBeInTheDocument()
+    expect(within(focus).getByText('Independent validator evaluation')).toBeInTheDocument()
+    expect(within(focus).getByText('UNREAD')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Rule spectrum' })).not.toBeInTheDocument()
+  })
+
+  it('discards legacy identity-less archive records instead of rendering them', async () => {
+    const failResponse = await makeFailResponse()
+    localStorage.setItem('equivlab:history:v2', JSON.stringify([{ id: 'legacy', label: 'Legacy', report: failResponse.report }]))
+    render(<App />)
+
+    expect(screen.queryByText('Legacy')).not.toBeInTheDocument()
+  })
+
+  it('rejects a shared report whose source URL does not match its pinned identity', async () => {
+    const failResponse = await makeFailResponse()
+    const tampered = {
+      fixtureId: 'tip-jar',
+      identity: {
+        repository: 'equivlab/demo',
+        commit: '0123456789abcdef0123456789abcdef01234567',
+        path: 'fixtures/backdoored_tip_jar/contract.py',
+        source: 'contract source',
+      },
+      report: { ...failResponse.report, source: { ...failResponse.report.source, url: 'https://example.invalid/tampered.py' } },
+      sourceMode: 'submitted',
+      version: 1,
+    }
+    const encoded = btoa(JSON.stringify(tampered)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+    window.history.replaceState(null, '', `/#r=${encoded}`)
+    render(<App />)
+
+    expect(screen.queryByText(/no preceding caller-derived authority guard/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /run analysis to share/i })).toBeDisabled()
+  })
+
+  it('keeps local findings available before any wallet connection', async () => {
+    const user = userEvent.setup()
+    const failResponse = await makeFailResponse()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => failResponse }))
+    render(<App />)
+
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+    await user.click(analyzeButton)
+
+    expect((await screen.findAllByText(/no preceding caller-derived authority guard/i)).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('AUTH-01').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('VALUE-01').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /request attestation/i })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /registry boundary/i })).toBeInTheDocument()
+  })
+
+  it('invalidates a report when the visible source identity changes', async () => {
+    const user = userEvent.setup()
+    const failResponse = await makeFailResponse()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => failResponse }))
+    render(<App />)
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+    await user.click(analyzeButton)
+    expect((await screen.findAllByText(/no preceding caller-derived authority guard/i)).length).toBeGreaterThan(0)
+
+    await user.clear(screen.getByRole('textbox', { name: 'Repository' }))
+    await user.type(screen.getByRole('textbox', { name: 'Repository' }), 'equivlab/changed')
+
+    expect(screen.queryAllByText(/no preceding caller-derived authority guard/i)).toHaveLength(0)
+    expect(screen.getByRole('button', { name: /run analysis to share/i })).toBeDisabled()
+  })
+
+  it('restores a shared report only as an unverified snapshot pending reproduction', async () => {
+    const user = userEvent.setup()
+    const failResponse = await makeFailResponse()
+    const writeText = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => failResponse }))
+    render(<App />)
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+    await user.click(analyzeButton)
+    await screen.findAllByText(/no preceding caller-derived authority guard/i)
+    await user.click(screen.getByRole('button', { name: 'Share snapshot' }))
+
+    const sharedUrl = writeText.mock.calls[0][0] as string
+    expect(sharedUrl).toContain('#r=')
+    cleanup()
+    const shared = new URL(sharedUrl)
+    window.history.replaceState(null, '', `${shared.pathname}${shared.search}${shared.hash}`)
+    render(<App />)
+
+    expect(screen.queryByText(/no preceding caller-derived authority guard/i)).not.toBeInTheDocument()
+    expect(screen.getByText('Unverified local snapshot')).toBeInTheDocument()
+    expect(screen.getByText(/run analysis to reproduce its findings/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /run analysis to share/i })).toBeDisabled()
+  })
+
+  it('rejects analyzer reports that omit implemented policy rules', async () => {
+    const user = userEvent.setup()
+    const incomplete = await makeFailResponse({ implemented_rules: ['AUTH-01', 'VALUE-01'] })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => incomplete }))
+    render(<App />)
+
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+    await user.click(analyzeButton)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be reproduced/i)
+    expect(screen.queryByText(/no preceding caller-derived authority guard/i)).not.toBeInTheDocument()
+  })
+
+  it('disables analysis immediately while a changed source digest is pending', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+
+    await user.type(screen.getByRole('textbox', { name: 'Contract source preview' }), '\n# changed')
+    expect(analyzeButton).toBeDisabled()
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+  })
+
+  it('does not expose wallet connection before registry configuration', async () => {
+    render(<App />)
+
+    expect(screen.queryByRole('button', { name: /connect wallet/i })).not.toBeInTheDocument()
+  })
+
+  it('exposes all four honest result classes in the reference workflow', () => {
+    render(<App />)
+    expect(screen.getByRole('button', { name: /permissionless tip jar/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /schema-only validator/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /hardened fact checker/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /hash mismatch/i })).toBeInTheDocument()
+  })
+})

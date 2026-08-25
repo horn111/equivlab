@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.gltest-cache/
+.venv-direct/
+artifacts/
+
+# Frontend build and dependency output
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Local environment and deployment state
+.env
+.env.*
+!.env.example
+.vercel/
+
+# Local editor and agent state
+.claude/
+.codex/
+.cursor/
+.impeccable/
+
+# OS metadata
+.DS_Store
+Thumbs.db
