@@ -29,8 +29,8 @@ import type {
 
 const POLICY_ID = 'gl-consensus-baseline-1'
 const AttestationBoundary = lazy(() => import('./AttestationBoundary'))
-const DEMO_REPOSITORY = import.meta.env.VITE_DEMO_REPOSITORY?.trim() || 'equivlab/demo'
-const PINNED_COMMIT = import.meta.env.VITE_DEMO_COMMIT?.trim() || '0123456789abcdef0123456789abcdef01234567'
+const DEMO_REPOSITORY = import.meta.env.VITE_DEMO_REPOSITORY?.trim() || 'horn111/equivlab'
+const PINNED_COMMIT = import.meta.env.VITE_DEMO_COMMIT?.trim() || 'aef703943cef6a6d9c3f65545072711d78d44417'
 const RULES = [
   ['SRC-01', 'Pinned source identity', 'CRITICAL'],
   ['CONS-01', 'Independent validator evaluation', 'CRITICAL'],

@@ -9,7 +9,7 @@ const IMPLEMENTED_RULES = [
   'AUTH-01', 'BOUND-01', 'CONS-01', 'EVID-01', 'PROMPT-01', 'REPLAY-01',
   'RESULT-01', 'SRC-01', 'STATE-01', 'TIME-01', 'URL-01', 'VALUE-01',
 ]
-const TIP_JAR_URL = 'https://raw.githubusercontent.com/equivlab/demo/0123456789abcdef0123456789abcdef01234567/fixtures/backdoored_tip_jar/contract.py'
+const TIP_JAR_URL = 'https://raw.githubusercontent.com/horn111/equivlab/aef703943cef6a6d9c3f65545072711d78d44417/fixtures/backdoored_tip_jar/contract.py'
 
 async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<AnalyzeResponse> {
   const base: AuditReport = {
@@ -94,8 +94,8 @@ describe('Phase 4 workbench', () => {
     const tampered = {
       fixtureId: 'tip-jar',
       identity: {
-        repository: 'equivlab/demo',
-        commit: '0123456789abcdef0123456789abcdef01234567',
+        repository: 'horn111/equivlab',
+        commit: 'aef703943cef6a6d9c3f65545072711d78d44417',
         path: 'fixtures/backdoored_tip_jar/contract.py',
         source: 'contract source',
       },
