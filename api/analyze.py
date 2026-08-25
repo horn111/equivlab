@@ -4,18 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "analyzer"))
-
-from equivlab.report import analyze_source  # noqa: E402
+from equivlab.report import analyze_source
 
 
 MAX_SOURCE_BYTES = 512_000

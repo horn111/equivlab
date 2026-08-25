@@ -1,0 +1,16 @@
+.gltest-cache
+.venv
+.venv-direct
+.vercel-uv-cache
+.pytest_cache
+.env
+.env.*
+artifacts
+build
+analyzer/equivlab.egg-info
+tests
+.claude
+.codex
+.cursor
+.impeccable
+web/dist

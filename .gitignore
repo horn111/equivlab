@@ -5,8 +5,11 @@ __pycache__/
 .coverage.*
 htmlcov/
 .gltest-cache/
+.venv/
 .venv-direct/
 artifacts/
+build/
+*.egg-info/
 
 # Frontend build and dependency output
 node_modules/
@@ -19,6 +22,7 @@ dist/
 .env.*
 !.env.example
 .vercel/
+.vercel-uv-cache/
 
 # Local editor and agent state
 .claude/

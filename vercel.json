@@ -1,19 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
   "buildCommand": "cd web && npm run build",
   "outputDirectory": "web/dist",
   "functions": {
-    "api/analyze.py": {
+    "api/**/*.py": {
       "maxDuration": 30,
-      "includeFiles": "analyzer/**"
+      "includeFiles": "analyzer/**",
+      "excludeFiles": "{.gltest-cache/**,.venv/**,.venv-direct/**,.vercel/**,.vercel-uv-cache/**,artifacts/**,fixtures/**,tests/**,web/dist/**,web/node_modules/**}"
     }
   },
-  "rewrites": [
-    {
-      "source": "/api/analyze",
-      "destination": "/api/analyze.py"
-    }
-  ],
   "headers": [
     {
       "source": "/(.*)",
