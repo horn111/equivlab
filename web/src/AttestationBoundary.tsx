@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowClockwiseIcon } from '@phosphor-icons/react/ArrowClockwise'
 import { ArrowSquareOutIcon } from '@phosphor-icons/react/ArrowSquareOut'
+import { GitCommitIcon } from '@phosphor-icons/react/GitCommit'
 import { SealCheckIcon } from '@phosphor-icons/react/SealCheck'
 import { SpinnerGapIcon } from '@phosphor-icons/react/SpinnerGap'
 import { WalletIcon } from '@phosphor-icons/react/Wallet'
@@ -49,6 +50,9 @@ interface PendingAttestation {
 }
 
 interface Props {
+  analysisLoading: boolean
+  onEditSourceRevision: () => void
+  onUsePinnedSource: () => void
   report: AuditReport
   sourceMode: AnalyzeResponse['source_mode'] | null
 }
@@ -84,7 +88,7 @@ function stagePosition(stage: LifecycleStage): number {
   return position < 0 ? -1 : position
 }
 
-export default function AttestationBoundary({ report, sourceMode }: Props) {
+export default function AttestationBoundary({ analysisLoading, onEditSourceRevision, onUsePinnedSource, report, sourceMode }: Props) {
   const resolution = useMemo(() => resolveGenLayerConfig(import.meta.env), [])
   const config = resolution.config
   const [account, setAccount] = useState<RegistryAddress | null>(null)
@@ -388,9 +392,6 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
             {stage === 'connecting' ? 'Authorizing wallet' : 'Connect wallet'}
           </button>
         )}
-        {config && account && sourceMode !== 'retrieved' && (
-          <span className="remote-source-required">REMOTE REPRODUCTION REQUIRED</span>
-        )}
         {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
           <button className="primary-action" onClick={requestAttestation} disabled={busy}>
             {stage === 'signing' ? <SpinnerGapIcon className="spin" /> : <SealCheckIcon />}
@@ -404,6 +405,19 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
           </button>
         )}
       </div>
+
+      {config && account && sourceMode !== 'retrieved' && (
+        <div className="registry-guidance" role="status">
+          <div>
+            <strong>Pinned source required</strong>
+            <p>This report used bundled preview bytes. Fetch and reproduce the exact commit-pinned source before requesting an attestation.</p>
+          </div>
+          <button className="secondary-action" type="button" onClick={onUsePinnedSource} disabled={analysisLoading}>
+            {analysisLoading ? <SpinnerGapIcon className="spin" /> : <ArrowClockwiseIcon />}
+            {analysisLoading ? 'Reproducing source' : 'Reproduce pinned source'}
+          </button>
+        </div>
+      )}
 
       {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
         <label className="supersedes-field">
@@ -440,9 +454,9 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
           aria-label={readbackAuthority === 'finalized' ? 'Finalized authoritative registry readback' : 'Existing registry readback'}
         >
           <div className="readback-heading">
-            <span>{readbackAuthority === 'finalized' ? 'FINALIZED AUTHORITATIVE READBACK' : 'EXISTING REGISTRY READBACK'}</span>
+            <span>{readbackAuthority === 'finalized' ? 'FINALIZED AUTHORITATIVE READBACK' : 'ALREADY REGISTERED'}</span>
             <strong className={`status-${readback.report.status.toLowerCase()}`}>{readback.report.status}</strong>
-            {readbackAuthority !== 'finalized' && <small>FINALIZATION NOT INDEPENDENTLY CHECKED</small>}
+            {readbackAuthority !== 'finalized' && <small>AUDIT {readback.audit.id} · FINALIZATION NOT INDEPENDENTLY CHECKED</small>}
           </div>
           <dl>
             <div><dt>AUDIT ID</dt><dd>{readback.audit.id}</dd></div>
@@ -450,17 +464,32 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
             <div><dt>REQUESTER</dt><dd><ExactValue label="Requester address" value={readback.audit.requester} onStatus={setAnnouncement} /></dd></div>
             <div><dt>CHALLENGED</dt><dd>{readback.audit.challenged ? 'YES' : 'NO'}</dd></div>
           </dl>
-          {account && (
-            <div className="challenge-control">
-              <label>
-                <span>CHALLENGE REASON SHA-256</span>
-                <input value={challengeReasonHash} onChange={(event) => setChallengeReasonHash(event.target.value)} placeholder="64 lowercase hexadecimal characters" />
-              </label>
-              <button className="secondary-action" onClick={challengeAttestation} disabled={challengeBusy}>
-                {challengeBusy ? <SpinnerGapIcon className="spin" /> : <WarningCircleIcon />}
-                {challengeBusy ? 'Finalizing challenge' : readback.audit.challenged ? 'Record another challenge' : 'Record challenge'}
+          {readbackAuthority !== 'finalized' && (
+            <div className="registry-guidance registry-guidance-readback">
+              <div>
+                <strong>This revision already has a registry record</strong>
+                <p>Audit {readback.audit.id} covers this exact source URL, hash, and policy. Duplicate audit requests are not accepted.</p>
+              </div>
+              <button className="secondary-action" type="button" onClick={onEditSourceRevision}>
+                <GitCommitIcon /> Analyze a new revision
               </button>
             </div>
+          )}
+          {account && (
+            <details className="challenge-disclosure">
+              <summary>Challenge this registry record</summary>
+              <p>Submit a SHA-256 hash that commits to your challenge reason. This appends a challenge record; it does not replace the audit.</p>
+              <div className="challenge-control">
+                <label>
+                  <span>CHALLENGE REASON SHA-256</span>
+                  <input value={challengeReasonHash} onChange={(event) => setChallengeReasonHash(event.target.value)} placeholder="64 lowercase hexadecimal characters" />
+                </label>
+                <button className="secondary-action" onClick={challengeAttestation} disabled={challengeBusy}>
+                  {challengeBusy ? <SpinnerGapIcon className="spin" /> : <WarningCircleIcon />}
+                  {challengeBusy ? 'Finalizing challenge' : readback.audit.challenged ? 'Record another challenge' : 'Record challenge'}
+                </button>
+              </div>
+            </details>
           )}
           {challengeExplorerUrl && <a className="challenge-link" href={challengeExplorerUrl} target="_blank" rel="noreferrer">Challenge transaction <ArrowSquareOutIcon /></a>}
         </section>

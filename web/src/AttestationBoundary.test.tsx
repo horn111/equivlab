@@ -10,6 +10,8 @@ const REGISTRY = `0x${'2'.repeat(40)}` as const
 const TX_HASH = `0x${'3'.repeat(64)}` as TransactionHash
 const SOURCE_HASH = '4'.repeat(64)
 const SOURCE_URL = `https://raw.githubusercontent.com/equivlab/demo/${'5'.repeat(40)}/fixtures/backdoored_tip_jar/contract.py`
+const onEditSourceRevision = vi.fn()
+const onUsePinnedSource = vi.fn()
 
 const mocks = vi.hoisted(() => ({
   ensureWalletNetwork: vi.fn(),
@@ -91,7 +93,7 @@ describe('attestation lifecycle', () => {
     mocks.readAuthoritativeAudit.mockResolvedValue(authoritative)
     mocks.readLatestRegistryAudit.mockResolvedValue(null)
 
-    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     await user.click(screen.getByRole('button', { name: /connect wallet/i }))
     expect(mocks.ensureWalletNetwork).toHaveBeenCalledWith(
       expect.objectContaining({ network: 'testnetBradbury' }),
@@ -119,13 +121,17 @@ describe('attestation lifecycle', () => {
   })
 
   it('loads an existing source-matched audit without wallet state on a fresh browser', async () => {
+    const user = userEvent.setup()
     mocks.readLatestRegistryAudit.mockResolvedValue(authoritative)
 
-    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
 
     expect(await screen.findByRole('region', { name: /existing registry readback/i })).toBeInTheDocument()
+    expect(screen.getByText(/already registered/i)).toBeInTheDocument()
     expect(screen.getAllByText(/finalization was not independently checked/i).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /request attestation/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /analyze a new revision/i }))
+    expect(onEditSourceRevision).toHaveBeenCalledOnce()
     expect(mocks.readLatestRegistryAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ registryAddress: REGISTRY }),
@@ -145,7 +151,7 @@ describe('attestation lifecycle', () => {
       .mockResolvedValueOnce({ statusName: 'FINALIZED', txExecutionResultName: 'FINISHED_WITH_RETURN' })
     mocks.readAuthoritativeAudit.mockResolvedValue(authoritative)
 
-    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     await user.click(screen.getByRole('button', { name: /connect wallet/i }))
     await user.type(await screen.findByLabelText(/supersedes audit id/i), '3')
     await user.click(screen.getByRole('button', { name: /request attestation/i }))
@@ -160,14 +166,26 @@ describe('attestation lifecycle', () => {
 
   it('distinguishes an absent audit from a failed registry lookup', async () => {
     mocks.readLatestRegistryAudit.mockResolvedValue(null)
-    const { unmount } = render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    const { unmount } = render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     expect(await screen.findByText(/no existing audit for this exact source identity/i)).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
     unmount()
     mocks.readLatestRegistryAudit.mockRejectedValue(new Error('RPC unavailable'))
-    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     expect(await screen.findByRole('alert')).toHaveTextContent(/registry lookup failed: rpc unavailable/i)
     expect(screen.getByRole('button', { name: /retry registry lookup/i })).toBeInTheDocument()
+  })
+
+  it('turns a submitted preview into an actionable pinned-source recovery step', async () => {
+    const user = userEvent.setup()
+    window.ethereum = { request: vi.fn().mockResolvedValue([ADDRESS]) }
+
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="submitted" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
+    await user.click(screen.getByRole('button', { name: /connect wallet/i }))
+
+    expect(screen.getByText(/this report used bundled preview bytes/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /reproduce pinned source/i }))
+    expect(onUsePinnedSource).toHaveBeenCalledOnce()
   })
 })

@@ -10,11 +10,11 @@ security guarantee.
 | --- | --- | --- |
 | Dependency-free Python suite | `117 passed` on 2026-08-27 | Analyzer, API boundary, and contract stub; unrelated global pytest plugins disabled |
 | GenLayer direct-mode suite | `7 passed` on 2026-08-27 | Official GenVM v0.2.16 runner with mocked web responses |
-| Frontend unit/integration suite | `27 passed` on 2026-08-27 | Browser-local behavior, SDK clients, EIP-1193 network switching, and wallet/readback lifecycle |
+| Frontend unit/integration suite | `29 passed` on 2026-08-27 | Browser-local behavior, SDK clients, EIP-1193 network switching, wallet/readback lifecycle, and pinned-source recovery |
 | Production frontend build | Passed on 2026-08-27 | TypeScript and Vite production compilation |
 | npm dependency audit | `0 vulnerabilities` on 2026-08-27 | Published npm dependency advisories |
 | Impeccable static detector | `0 findings` on 2026-08-27 | `web/src` source scan |
-| Responsive browser pass | Passed at 1440×900, 1440×700, and 390×844 on 2026-08-27 | Fixture switching, local analysis, result focus, 44px targets, and horizontal overflow |
+| Responsive browser pass | Passed at 1440×900, 1440×700, and 390×844 on 2026-08-27 | Fixture switching, local analysis, result focus, registry recovery states, 44px targets, and horizontal overflow |
 | Production browser E2E | Passed on 2026-08-27 | Pinned fetch → `/api/analyze` 200 → local `FAIL` → automatic source-matched audit `1` registry readback without wallet; UI states that finalization was not independently checked |
 | Wallet connection browser test | Passed on 2026-08-27 | Simulated injected EIP-1193 provider → account authorization → Bradbury switch fallback → Bradbury network addition; no signature or transaction was simulated |
 | Production accessibility | `0` WCAG A/AA violations on 2026-08-27 | axe-core 4.12.1; contrast remained incomplete where pseudo-element backgrounds prevented automated calculation |

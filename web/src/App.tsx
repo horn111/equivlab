@@ -766,6 +766,9 @@ export default function App() {
   const [liveMessage, setLiveMessage] = useState('Ready to analyze a pinned source revision.')
   const controller = useRef<AbortController | null>(null)
   const resultSummaryRef = useRef<HTMLDivElement | null>(null)
+  const sourcePanelRef = useRef<HTMLElement | null>(null)
+  const commitInputRef = useRef<HTMLInputElement | null>(null)
+  const analyzeActionRef = useRef<HTMLButtonElement | null>(null)
   const focusResultAfterAnalysis = useRef(false)
   const selectedFixture = fixtureById(fixtureId)
   const sourceUrl = pinnedSourceUrl(identity)
@@ -800,7 +803,7 @@ export default function App() {
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}${window.location.hash}`)
   }, [fixtureId])
 
-  const runAnalysis = useCallback(async () => {
+  const runAnalysis = useCallback(async (previewMode: boolean) => {
     if (!sourceDigest || !expectedDigest) return
     controller.current?.abort()
     controller.current = new AbortController()
@@ -809,7 +812,7 @@ export default function App() {
     setLiveMessage('Analyzing the exact source revision.')
     focusResultAfterAnalysis.current = true
     try {
-      const response = await analyzeRevision(sourceUrl, expectedDigest, usePreview ? identity.source : undefined, controller.current.signal)
+      const response = await analyzeRevision(sourceUrl, expectedDigest, previewMode ? identity.source : undefined, controller.current.signal)
       if (!await isReproducedResponse(identity, sourceDigest, response)) {
         throw new Error('The analyzer response could not be reproduced against this source revision and policy.')
       }
@@ -844,7 +847,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [expectedDigest, identity, selectedFixture.label, sourceDigest, sourceUrl, usePreview])
+  }, [expectedDigest, identity, selectedFixture.label, sourceDigest, sourceUrl])
 
   const updateIdentity = (next: SourceIdentity) => {
     controller.current?.abort()
@@ -865,6 +868,24 @@ export default function App() {
     setFixtureId(id)
     updateIdentity(fixtureIdentity(fixture))
     setUsePreview(true)
+  }
+
+  const focusSourceControl = (control: HTMLInputElement | HTMLButtonElement | null) => {
+    sourcePanelRef.current?.scrollIntoView({ block: 'start' })
+    control?.focus()
+  }
+
+  const usePinnedSource = () => {
+    setUsePreview(false)
+    setSourceOpen(false)
+    setLiveMessage('Fetching and reproducing the commit-pinned source. The connected wallet remains available.')
+    void runAnalysis(false)
+  }
+
+  const editSourceRevision = () => {
+    setLiveMessage('Edit the full commit or another source identity field, then analyze the new revision.')
+    focusSourceControl(commitInputRef.current)
+    commitInputRef.current?.select()
   }
 
   const share = async () => {
@@ -918,7 +939,7 @@ export default function App() {
       <main onKeyDown={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !loading && sourceDigest) {
           event.preventDefault()
-          void runAnalysis()
+          void runAnalysis(usePreview)
         }
       }}>
         <header className="topbar">
@@ -928,7 +949,7 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             <span className="policy-chip">{POLICY_ID}</span>
-            <button className="primary-action mobile-analyze-action" onClick={runAnalysis} disabled={loading || !sourceDigest}>
+            <button className="primary-action mobile-analyze-action" onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
               {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
               {loading ? 'Analyzing' : report ? 'Reproduce analysis' : 'Analyze'}
             </button>
@@ -953,7 +974,7 @@ export default function App() {
         </div>
 
         <div className={`workbench ${report ? 'has-report' : 'awaiting-report'}`}>
-          <section className="source-panel" aria-labelledby="source-title">
+          <section className="source-panel" ref={sourcePanelRef} aria-labelledby="source-title">
             <div className="panel-heading">
               <div>
                 <h1 id="source-title">Pin the exact contract revision</h1>
@@ -968,7 +989,7 @@ export default function App() {
               </label>
               <label>
                 <span><GitCommitIcon /> Full commit</span>
-                <input value={identity.commit} onChange={(event) => updateIdentity({ ...identity, commit: event.target.value })} spellCheck="false" />
+                <input ref={commitInputRef} value={identity.commit} onChange={(event) => updateIdentity({ ...identity, commit: event.target.value })} spellCheck="false" />
               </label>
               <label className="path-field">
                 <span><CodeIcon /> Contract path</span>
@@ -1000,7 +1021,7 @@ export default function App() {
                 <ShieldWarningIcon aria-hidden="true" />
                 <p><strong>{selectedFixture.label}</strong>{selectedFixture.note}</p>
               </div>
-              <button className="primary-action analyze-action" onClick={runAnalysis} disabled={loading || !sourceDigest}>
+              <button ref={analyzeActionRef} className="primary-action analyze-action" onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
                 {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
                 {loading ? 'Analyzing revision' : report ? 'Reproduce analysis' : 'Analyze revision'}
                 {!loading && <ArrowRightIcon />}
@@ -1025,7 +1046,7 @@ export default function App() {
               <div className="error-state" role="alert">
                 <WarningCircleIcon />
                 <div><strong>Analysis did not complete</strong><p>{error}</p></div>
-                <button onClick={runAnalysis}><ArrowClockwiseIcon /> Retry</button>
+                <button onClick={() => void runAnalysis(usePreview)}><ArrowClockwiseIcon /> Retry</button>
               </div>
             )}
           </section>
@@ -1059,7 +1080,13 @@ export default function App() {
         </p>}
 
         {report && (
-          <AttestationBoundary report={report} sourceMode={sourceMode} />
+          <AttestationBoundary
+            analysisLoading={loading}
+            report={report}
+            sourceMode={sourceMode}
+            onUsePinnedSource={usePinnedSource}
+            onEditSourceRevision={editSourceRevision}
+          />
         )}
         {history.length > 0 && <HistoryArchive records={history} selected={comparison} onToggle={toggleComparison} onRestore={restoreRecord} />}
 

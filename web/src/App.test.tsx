@@ -53,8 +53,10 @@ async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<A
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   localStorage.clear()
   window.history.replaceState(null, '', '/')
+  delete window.ethereum
 })
 
 describe('source identity helpers', () => {
@@ -130,6 +132,40 @@ describe('EquivLab workbench', () => {
     expect(screen.getAllByRole('button', { name: /reproduce analysis/i })).toHaveLength(2)
     expect(screen.getByRole('button', { name: /reveal pinned raw url/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /copy canonical sha-256/i })).toBeInTheDocument()
+  })
+
+  it('reproduces a bundled preview from the pinned source without dropping the connected wallet', async () => {
+    const user = userEvent.setup()
+    const submitted = await makeFailResponse()
+    const retrieved: AnalyzeResponse = { ...submitted, source_mode: 'retrieved' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => submitted })
+      .mockResolvedValueOnce({ ok: true, json: async () => retrieved })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('VITE_NETWORK_NAME', 'testnetBradbury')
+    vi.stubEnv('VITE_REGISTRY_ADDRESS', `0x${'2'.repeat(40)}`)
+    const address = `0x${'1'.repeat(40)}`
+    window.ethereum = {
+      request: vi.fn(async ({ method }) => {
+        if (method === 'eth_requestAccounts') return [address]
+        if (method === 'eth_chainId') return '0x107d'
+        return null
+      }),
+    }
+    render(<App />)
+
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+    await user.click(analyzeButton)
+    await user.click(await screen.findByRole('button', { name: /connect wallet/i }))
+    await user.click(screen.getByRole('button', { name: /reproduce pinned source/i }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>
+    expect(secondBody).not.toHaveProperty('source')
+    expect(await screen.findByText('Fetched pinned source')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /use bundled preview/i })).not.toBeChecked()
+    expect(screen.getByTitle(address)).toBeInTheDocument()
   })
 
   it('invalidates a report when the visible source identity changes', async () => {
