@@ -14,7 +14,6 @@ from equivlab.canonicalize import canonical_sha256
 ROOT = Path(__file__).parents[2]
 CONTRACT_PATH = ROOT / "contracts" / "consensus_safety_registry.py"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-EMPTY_SEMANTIC = {"failed_rules": [], "warning_rules": []}
 
 
 class _Decorator:
@@ -38,7 +37,6 @@ class _Contract:
 class FakeRuntime:
     def __init__(self):
         self.web_values: list[object] = []
-        self.llm_values: list[object] = []
         self.validator_accepted: bool | None = None
 
     def get(self, _url: str, **_kwargs):
@@ -49,14 +47,6 @@ class FakeRuntime:
             raise value
         body = value.encode("utf-8") if isinstance(value, str) else value
         return types.SimpleNamespace(body=body)
-
-    def exec_prompt(self, _prompt: str, **_kwargs):
-        if not self.llm_values:
-            raise RuntimeError("missing LLM mock")
-        value = self.llm_values.pop(0)
-        if isinstance(value, Exception):
-            raise value
-        return value
 
     def run_nondet_unsafe(self, leader, validator):
         leader_payload = leader()
@@ -77,10 +67,7 @@ def load_contract_module():
         UserError=ValueError,
         run_nondet_unsafe=runtime.run_nondet_unsafe,
     )
-    nondet = types.SimpleNamespace(
-        web=types.SimpleNamespace(get=runtime.get),
-        exec_prompt=runtime.exec_prompt,
-    )
+    nondet = types.SimpleNamespace(web=types.SimpleNamespace(get=runtime.get))
     gl = types.SimpleNamespace(
         Contract=_Contract,
         message=types.SimpleNamespace(sender_address="0xrequester"),
@@ -129,9 +116,8 @@ def pinned_url(name: str) -> str:
     return f"https://raw.githubusercontent.com/equivlab/demo/{COMMIT}/{name}/contract.py"
 
 
-def arrange_consensus(runtime: FakeRuntime, source: str, semantic: object = EMPTY_SEMANTIC) -> None:
+def arrange_consensus(runtime: FakeRuntime, source: str) -> None:
     runtime.web_values = [source, source]
-    runtime.llm_values = [semantic, semantic]
 
 
 def request(registry, source: str, name: str, supersedes_id: int | None = None):
@@ -159,7 +145,6 @@ def test_backdoored_tip_jar_records_expected_deterministic_failure() -> None:
     assert audit_id == 0
     assert report(registry, audit_id)["status"] == "FAIL"
     assert report(registry, audit_id)["failed_rules"] == ["AUTH-01", "VALUE-01"]
-    assert runtime.llm_values == [EMPTY_SEMANTIC, EMPTY_SEMANTIC]
 
 
 def test_schema_only_checker_records_consensus_and_evidence_failures() -> None:
@@ -184,18 +169,6 @@ def test_hardened_revision_can_record_meets_baseline() -> None:
     assert stored["failed_rules"] == []
     assert stored["warning_rules"] == []
     assert runtime.validator_accepted is True
-
-
-def test_bounded_semantic_warning_records_warn() -> None:
-    _module, registry, runtime = load_contract_module()
-    source = fixture_source("hardened_fact_checker")
-    semantic = {"failed_rules": [], "warning_rules": ["PROMPT-01"]}
-    arrange_consensus(runtime, source, semantic)
-
-    audit_id = request(registry, source, "hardened_fact_checker")
-
-    assert report(registry, audit_id)["status"] == "WARN"
-    assert report(registry, audit_id)["warning_rules"] == ["PROMPT-01"]
 
 
 def test_hash_mismatch_finalizes_unverifiable() -> None:
@@ -225,24 +198,10 @@ def test_fetch_failure_finalizes_unverifiable() -> None:
     assert report(registry, audit_id)["status"] == "UNVERIFIABLE"
 
 
-def test_malformed_semantic_output_finalizes_unverifiable() -> None:
-    module, registry, runtime = load_contract_module()
-    source = fixture_source("hardened_fact_checker")
-    arrange_consensus(runtime, source, {"unexpected": []})
-
-    audit_id = request(registry, source, "hardened_fact_checker")
-
-    stored = report(registry, audit_id)
-    assert stored["status"] == "UNVERIFIABLE"
-    assert stored["severity"] == "CRITICAL"
-    assert stored["unverifiable_rules"] == list(module.SEMANTIC_RULE_IDS)
-
-
-def test_leader_validator_semantic_disagreement_writes_no_state() -> None:
+def test_leader_validator_source_disagreement_writes_no_state() -> None:
     _module, registry, runtime = load_contract_module()
     source = fixture_source("hardened_fact_checker")
-    runtime.web_values = [source, source]
-    runtime.llm_values = [EMPTY_SEMANTIC, {"failed_rules": [], "warning_rules": ["STATE-01"]}]
+    runtime.web_values = [source, source + "\n# changed after leader fetch\n"]
 
     with pytest.raises(ValueError, match="validator disagreement"):
         request(registry, source, "hardened_fact_checker")
