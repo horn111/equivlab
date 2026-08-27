@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   writeContract: vi.fn(),
   waitForTransactionReceipt: vi.fn(),
   readAuthoritativeAudit: vi.fn(),
+  readLatestAuthoritativeAudit: vi.fn(),
 }))
 
 vi.mock('./genlayer', () => ({
@@ -24,6 +25,7 @@ vi.mock('./genlayer', () => ({
   isSuccessfulExecution: (receipt: { txExecutionResultName?: string }) => receipt.txExecutionResultName === 'FINISHED_WITH_RETURN',
   isUndeterminedReceipt: (receipt: { statusName?: string }) => receipt.statusName === 'UNDETERMINED',
   readAuthoritativeAudit: mocks.readAuthoritativeAudit,
+  readLatestAuthoritativeAudit: mocks.readLatestAuthoritativeAudit,
   resolveGenLayerConfig: () => ({
     config: {
       explorerBaseUrl: 'https://explorer-bradbury.genlayer.com',
@@ -83,6 +85,7 @@ describe('attestation lifecycle', () => {
       .mockResolvedValueOnce({ statusName: 'ACCEPTED', txExecutionResultName: 'FINISHED_WITH_RETURN' })
       .mockResolvedValueOnce({ statusName: 'FINALIZED', txExecutionResultName: 'FINISHED_WITH_RETURN' })
     mocks.readAuthoritativeAudit.mockResolvedValue(authoritative)
+    mocks.readLatestAuthoritativeAudit.mockResolvedValue(null)
 
     render(<AttestationBoundary report={report} sourceMode="retrieved" />)
     await user.click(screen.getByRole('button', { name: /connect wallet/i }))
@@ -93,7 +96,7 @@ describe('attestation lifecycle', () => {
     expect(mocks.writeContract).toHaveBeenCalledWith({
       address: REGISTRY,
       functionName: 'request_audit',
-      args: [SOURCE_URL, SOURCE_HASH, report.policy, ''],
+      args: [SOURCE_URL, SOURCE_HASH, report.policy],
       value: 0n,
     })
     await waitFor(() => expect(mocks.readAuthoritativeAudit).toHaveBeenCalledWith(
@@ -105,5 +108,58 @@ describe('attestation lifecycle', () => {
       TX_HASH,
     ))
     expect(localStorage.getItem('equivlab:pending-attestation:v1')).toBeNull()
+  })
+
+  it('loads an existing source-matched audit without wallet state on a fresh browser', async () => {
+    mocks.readLatestAuthoritativeAudit.mockResolvedValue(authoritative)
+
+    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+
+    expect(await screen.findByRole('region', { name: /authoritative registry readback/i })).toBeInTheDocument()
+    expect(screen.getByText(/existing authoritative audit/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request attestation/i })).not.toBeInTheDocument()
+    expect(mocks.readLatestAuthoritativeAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ registryAddress: REGISTRY }),
+      SOURCE_HASH,
+      SOURCE_URL,
+      report.policy,
+    )
+  })
+
+  it('uses the typed supersession entrypoint when a prior audit ID is supplied', async () => {
+    const user = userEvent.setup()
+    window.ethereum = { request: vi.fn().mockResolvedValue([ADDRESS]) }
+    mocks.readLatestAuthoritativeAudit.mockResolvedValue(null)
+    mocks.writeContract.mockResolvedValue(TX_HASH)
+    mocks.waitForTransactionReceipt
+      .mockResolvedValueOnce({ statusName: 'ACCEPTED', txExecutionResultName: 'FINISHED_WITH_RETURN' })
+      .mockResolvedValueOnce({ statusName: 'FINALIZED', txExecutionResultName: 'FINISHED_WITH_RETURN' })
+    mocks.readAuthoritativeAudit.mockResolvedValue(authoritative)
+
+    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    await user.click(screen.getByRole('button', { name: /connect wallet/i }))
+    await user.type(await screen.findByLabelText(/supersedes audit id/i), '3')
+    await user.click(screen.getByRole('button', { name: /request attestation/i }))
+
+    expect(mocks.writeContract).toHaveBeenCalledWith({
+      address: REGISTRY,
+      functionName: 'request_superseding_audit',
+      args: [SOURCE_URL, SOURCE_HASH, report.policy, 3n],
+      value: 0n,
+    })
+  })
+
+  it('distinguishes an absent audit from a failed registry lookup', async () => {
+    mocks.readLatestAuthoritativeAudit.mockResolvedValue(null)
+    const { unmount } = render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    expect(await screen.findByText(/no existing audit for this exact source identity/i)).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    unmount()
+    mocks.readLatestAuthoritativeAudit.mockRejectedValue(new Error('RPC unavailable'))
+    render(<AttestationBoundary report={report} sourceMode="retrieved" />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/registry lookup failed: rpc unavailable/i)
+    expect(screen.getByRole('button', { name: /retry registry lookup/i })).toBeInTheDocument()
   })
 })

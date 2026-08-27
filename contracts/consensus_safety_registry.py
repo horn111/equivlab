@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import typing
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 
 POLICY_VERSION = "gl-consensus-baseline-1"
@@ -220,6 +220,132 @@ def _resolve_alias(value: str, aliases: dict[str, str]) -> str:
     return current
 
 
+def _assignment_nodes(node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, list[ast.AST]]:
+    assignments: dict[str, list[ast.AST]] = {}
+
+    def collect(item: ast.AST) -> None:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return
+        if isinstance(item, ast.Assign):
+            for target in item.targets:
+                if isinstance(target, ast.Name):
+                    assignments.setdefault(target.id, []).append(item.value)
+        elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
+            assignments.setdefault(item.target.id, []).append(item.value)
+        for child in ast.iter_child_nodes(item):
+            collect(child)
+
+    for statement in node.body:
+        collect(statement)
+    return assignments
+
+
+def _dependencies(
+    node: ast.AST | None,
+    parameters: set[str],
+    assignments: dict[str, list[ast.AST]],
+    seen: frozenset[str] = frozenset(),
+) -> set[str]:
+    if node is None:
+        return set()
+    name = _call_name(node)
+    if name == "gl.message.sender_address" or name.startswith("gl.message.sender_address."):
+        return {"sender"}
+    if name.startswith("self."):
+        return {"state"}
+    if isinstance(node, ast.Name):
+        if node.id in parameters:
+            return {"parameter"}
+        use_line = getattr(node, "lineno", 0)
+        prior = [value for value in assignments.get(node.id, []) if getattr(value, "lineno", 0) < use_line]
+        if prior and node.id not in seen:
+            result: set[str] = set()
+            for value in prior:
+                result.update(_dependencies(value, parameters, assignments, seen | {node.id}))
+            return result
+        return set()
+    result: set[str] = set()
+    for child in ast.iter_child_nodes(node):
+        result.update(_dependencies(child, parameters, assignments, seen))
+    return result
+
+
+def _unconditionally_blocks(statements: list[ast.stmt]) -> bool:
+    if not statements:
+        return False
+    statement = statements[0]
+    if isinstance(statement, (ast.Raise, ast.Return)):
+        return True
+    return (
+        isinstance(statement, ast.If)
+        and bool(statement.orelse)
+        and _unconditionally_blocks(statement.body)
+        and _unconditionally_blocks(statement.orelse)
+    )
+
+
+def _authority_condition(
+    node: ast.AST,
+    truth: bool,
+    parameters: set[str],
+    assignments: dict[str, list[ast.AST]],
+) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _authority_condition(node.operand, not truth, parameters, assignments)
+    if isinstance(node, ast.BoolOp):
+        if truth and isinstance(node.op, ast.And):
+            return any(_authority_condition(value, True, parameters, assignments) for value in node.values)
+        if not truth and isinstance(node.op, ast.Or):
+            return any(_authority_condition(value, False, parameters, assignments) for value in node.values)
+        return False
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        return False
+    left = _dependencies(node.left, parameters, assignments)
+    right = _dependencies(node.comparators[0], parameters, assignments)
+    sender_left = left == {"sender"} and right == {"state"}
+    sender_right = left == {"state"} and right == {"sender"}
+    if not (sender_left or sender_right):
+        return False
+    operator = node.ops[0]
+    if isinstance(operator, ast.Eq):
+        return truth
+    if isinstance(operator, ast.NotEq):
+        return not truth
+    if isinstance(operator, ast.In) and sender_left:
+        return truth
+    if isinstance(operator, ast.NotIn) and sender_left:
+        return not truth
+    return False
+
+
+def _has_authority_guard(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    before_line: int,
+    parameters: set[str],
+) -> bool:
+    assignments = _assignment_nodes(node)
+    for item in node.body:
+        if not isinstance(item, (ast.If, ast.Assert)) or item.lineno >= before_line:
+            continue
+        message_has_effects = isinstance(item, ast.Assert) and item.msg is not None and any(
+            isinstance(child, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr))
+            for child in ast.walk(item.msg)
+        )
+        if (
+            isinstance(item, ast.Assert)
+            and not message_has_effects
+            and _authority_condition(item.test, True, parameters, assignments)
+        ):
+            return True
+        if not isinstance(item, ast.If):
+            continue
+        if _unconditionally_blocks(item.body) and _authority_condition(item.test, False, parameters, assignments):
+            return True
+        if _unconditionally_blocks(item.orelse) and _authority_condition(item.test, True, parameters, assignments):
+            return True
+    return False
+
+
 def _deterministic_findings(source: str, source_url: str) -> list[str]:
     tree = ast.parse(source)
     failed: set[str] = set()
@@ -318,7 +444,7 @@ def _deterministic_findings(source: str, source_url: str) -> list[str]:
             recipient = _resolve_alias(recipient, aliases)
             amount = _resolve_alias(amount, aliases)
             guards = _blocking_guard_text(function, transfer.lineno)
-            has_authority = "sender_address" in guards and "self." in guards
+            has_authority = _has_authority_guard(function, transfer.lineno, parameter_set)
             if not has_authority:
                 failed.add("AUTH-01")
             if any(re.search(r"\b" + re.escape(parameter) + r"\b", amount) for parameter in parameters):
@@ -524,55 +650,101 @@ def _decision_signature(value: dict[str, typing.Any]) -> tuple[typing.Any, ...]:
     )
 
 
-def _source_key(source_hash: str, policy_version: str) -> str:
-    return source_hash + ":" + policy_version
+def _validate_source_url(source_url: str) -> str:
+    clean_url = source_url.strip()
+    if source_url != clean_url or len(clean_url) == 0 or len(clean_url) > MAX_SOURCE_URL_CHARS:
+        raise ValueError("source URL is empty, padded, or too long")
+    parsed = urlparse(clean_url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("source URL contains an invalid port") from exc
+    if (
+        parsed.scheme != "https"
+        or (parsed.hostname or "").lower() != "raw.githubusercontent.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+    ):
+        raise ValueError(
+            "source URL must use the approved raw GitHub HTTPS host without credentials, ports, query, or fragment"
+        )
+    encoded_parts = [part for part in parsed.path.split("/") if part]
+    decoded_parts = [unquote(part) for part in encoded_parts]
+    if (
+        len(decoded_parts) < 4
+        or re.fullmatch(r"[0-9a-fA-F]{40}", decoded_parts[2]) is None
+        or any(part in (".", "..") or "/" in part or "\\" in part or "\x00" in part for part in decoded_parts)
+    ):
+        raise ValueError("source URL must contain an organization, repository, full commit SHA, and file path")
+    return clean_url
 
 
-def _parse_audit_id(value: str, count: int) -> int | None:
-    if value == "":
-        return None
-    if not isinstance(value, str) or re.fullmatch(r"0|[1-9][0-9]*", value) is None:
-        raise ValueError("supersedes_id must be empty or a canonical decimal audit id")
-    audit_id = int(value)
-    if audit_id < 0 or audit_id >= count:
-        raise ValueError("superseded audit does not exist")
-    return audit_id
+def _source_key(source_url: str, source_hash: str, policy_version: str) -> str:
+    return _sha256_text(_canonical_json([source_url, source_hash, policy_version]))
 
 
 class ConsensusSafetyRegistry(gl.Contract):
     audits: DynArray[str]
     reports: DynArray[str]
-    latest_by_source_policy: TreeMap[str, u64]
+    latest_by_source_identity_policy: TreeMap[str, u64]
     superseded_by: TreeMap[u64, u64]
-    challenge_reason_by_audit: TreeMap[u64, str]
+    challenges: DynArray[str]
+    challenge_ids_by_audit: TreeMap[str, u64]
+    challenge_count_by_audit: TreeMap[u64, u64]
     next_audit_id: u64
+    next_challenge_id: u64
 
     def __init__(self):
         self.next_audit_id = u64(0)
+        self.next_challenge_id = u64(0)
 
     @gl.public.write
-    def request_audit(self, source_url: str, source_hash: str, policy_version: str, supersedes_id: str) -> u64:
-        clean_url = source_url.strip()
+    def request_audit(self, source_url: str, source_hash: str, policy_version: str) -> u64:
+        return self._request_audit(source_url, source_hash, policy_version, None)
+
+    @gl.public.write
+    def request_superseding_audit(
+        self,
+        source_url: str,
+        source_hash: str,
+        policy_version: str,
+        supersedes_id: u64,
+    ) -> u64:
+        return self._request_audit(source_url, source_hash, policy_version, int(supersedes_id))
+
+    def _request_audit(
+        self,
+        source_url: str,
+        source_hash: str,
+        policy_version: str,
+        superseded: int | None,
+    ) -> u64:
+        clean_url = _validate_source_url(source_url)
         clean_hash = source_hash.lower().removeprefix("sha256:")
-        if source_url != clean_url or len(clean_url) == 0 or len(clean_url) > MAX_SOURCE_URL_CHARS:
-            raise ValueError("source URL is empty, padded, or too long")
-        if not clean_url.startswith("https://raw.githubusercontent.com/"):
-            raise ValueError("source URL must use the approved raw GitHub HTTPS host")
-        parsed = urlparse(clean_url)
-        if parsed.scheme != "https" or (parsed.hostname or "").lower() != "raw.githubusercontent.com":
-            raise ValueError("source URL must use the approved raw GitHub HTTPS host")
         if re.fullmatch(r"[0-9a-f]{64}", clean_hash) is None:
             raise ValueError("source_hash must be a canonical SHA-256")
         if policy_version != POLICY_VERSION:
             raise ValueError("unsupported policy version")
 
         count = int(self.next_audit_id)
-        superseded = _parse_audit_id(supersedes_id, count)
-        key = _source_key(clean_hash, policy_version)
-        if key in self.latest_by_source_policy:
-            raise ValueError("duplicate source and policy audit")
+        if superseded is not None and (superseded < 0 or superseded >= count):
+            raise ValueError("superseded audit does not exist")
+        key = _source_key(clean_url, clean_hash, policy_version)
+        if key in self.latest_by_source_identity_policy:
+            raise ValueError("duplicate source identity and policy audit")
         if superseded is not None and u64(superseded) in self.superseded_by:
             raise ValueError("audit has already been superseded")
+        if superseded is not None:
+            old = json.loads(self.audits[superseded])
+            if old["requester"] != str(gl.message.sender_address):
+                raise ValueError("only the original requester may supersede an audit")
+            if old["policy"] != policy_version:
+                raise ValueError("superseding audit must use the same policy")
+            if old["source_url"] == clean_url and old["source_hash"] == clean_hash:
+                raise ValueError("superseding audit must use a distinct source identity")
 
         def independently_audit() -> dict[str, typing.Any]:
             return _audit_source(clean_url, clean_hash)
@@ -595,6 +767,7 @@ class ConsensusSafetyRegistry(gl.Contract):
         audit_id = self.next_audit_id
         audit = {
             "challenged": False,
+            "challenge_count": 0,
             "created_at": gl.message_raw["datetime"],
             "id": str(audit_id),
             "policy": policy_version,
@@ -607,7 +780,7 @@ class ConsensusSafetyRegistry(gl.Contract):
         }
         self.audits.append(_canonical_json(audit))
         self.reports.append(_canonical_json(result["report"]))
-        self.latest_by_source_policy[key] = audit_id
+        self.latest_by_source_identity_policy[key] = audit_id
         if superseded is not None:
             old = json.loads(self.audits[superseded])
             old["superseded_by"] = str(audit_id)
@@ -631,11 +804,15 @@ class ConsensusSafetyRegistry(gl.Contract):
         return self.reports[index]
 
     @gl.public.view
-    def get_latest(self, source_hash: str, policy_version: str) -> str:
-        key = _source_key(source_hash.lower().removeprefix("sha256:"), policy_version)
-        if key not in self.latest_by_source_policy:
+    def get_latest(self, source_url: str, source_hash: str, policy_version: str) -> str:
+        clean_url = _validate_source_url(source_url)
+        clean_hash = source_hash.lower().removeprefix("sha256:")
+        if re.fullmatch(r"[0-9a-f]{64}", clean_hash) is None or policy_version != POLICY_VERSION:
             return ""
-        return str(self.latest_by_source_policy[key])
+        key = _source_key(clean_url, clean_hash, policy_version)
+        if key not in self.latest_by_source_identity_policy:
+            return ""
+        return str(self.latest_by_source_identity_policy[key])
 
     @gl.public.write
     def challenge(self, audit_id: u64, reason_hash: str) -> str:
@@ -646,14 +823,49 @@ class ConsensusSafetyRegistry(gl.Contract):
         if re.fullmatch(r"[0-9a-f]{64}", clean_reason) is None:
             raise ValueError("reason_hash must be a canonical SHA-256")
         audit = json.loads(self.audits[index])
-        if audit["challenged"]:
-            raise ValueError("audit is already challenged")
+        challenge_id = self.next_challenge_id
+        challenge_index = int(audit["challenge_count"])
+        challenge_record = {
+            "audit_id": str(audit_id),
+            "challenged_at": gl.message_raw["datetime"],
+            "challenger": str(gl.message.sender_address),
+            "id": str(challenge_id),
+            "reason_hash": clean_reason,
+        }
+        self.challenges.append(_canonical_json(challenge_record))
+        self.challenge_ids_by_audit[str(audit_id) + ":" + str(challenge_index)] = challenge_id
+        self.challenge_count_by_audit[u64(index)] = u64(challenge_index + 1)
         audit["challenged"] = True
-        audit["challenged_by"] = str(gl.message.sender_address)
-        audit["challenge_reason_hash"] = clean_reason
+        audit["challenge_count"] = challenge_index + 1
         self.audits[index] = _canonical_json(audit)
-        self.challenge_reason_by_audit[u64(index)] = clean_reason
-        return str(audit_id)
+        self.next_challenge_id = u64(int(challenge_id) + 1)
+        return str(challenge_id)
+
+    @gl.public.view
+    def get_challenge(self, challenge_id: u64) -> str:
+        index = int(challenge_id)
+        if index < 0 or index >= int(self.next_challenge_id):
+            raise ValueError("challenge does not exist")
+        return self.challenges[index]
+
+    @gl.public.view
+    def get_challenge_count(self, audit_id: u64) -> u64:
+        index = int(audit_id)
+        if index < 0 or index >= int(self.next_audit_id):
+            raise ValueError("audit does not exist")
+        if u64(index) not in self.challenge_count_by_audit:
+            return u64(0)
+        return self.challenge_count_by_audit[u64(index)]
+
+    @gl.public.view
+    def get_audit_challenge(self, audit_id: u64, challenge_index: u64) -> str:
+        audit = int(audit_id)
+        item = int(challenge_index)
+        count = int(self.get_challenge_count(audit_id))
+        if item < 0 or item >= count:
+            raise ValueError("audit challenge does not exist")
+        challenge_id = self.challenge_ids_by_audit[str(audit) + ":" + str(item)]
+        return self.get_challenge(challenge_id)
 
     @gl.public.view
     def count(self) -> u64:

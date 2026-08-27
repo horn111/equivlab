@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ArrowClockwiseIcon } from '@phosphor-icons/react/ArrowClockwise'
 import { ArrowRightIcon } from '@phosphor-icons/react/ArrowRight'
@@ -26,9 +26,10 @@ import type {
   SharePayload,
   SourceIdentity,
 } from './types'
+import AttestationBoundary from './AttestationBoundary'
+import ExactValue from './ExactValue'
 
 const POLICY_ID = 'gl-consensus-baseline-1'
-const AttestationBoundary = lazy(() => import('./AttestationBoundary'))
 const DEMO_REPOSITORY = import.meta.env.VITE_DEMO_REPOSITORY?.trim() || 'horn111/equivlab'
 const PINNED_COMMIT = import.meta.env.VITE_DEMO_COMMIT?.trim() || 'aef703943cef6a6d9c3f65545072711d78d44417'
 const RULES = [
@@ -174,12 +175,16 @@ async function analyzeRevision(
     }),
     signal,
   })
-  const payload: unknown = await response.json()
+  const payload: unknown = await response.json().catch(() => null)
   if (!response.ok || !payload || typeof payload !== 'object' || !('report' in payload)) {
-    const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-      ? payload.error
-      : 'The analyzer returned an invalid response.'
-    throw new Error(message)
+    const payloadRecord = payload && typeof payload === 'object' ? payload as Record<string, unknown> : null
+    const baseMessage = payloadRecord && typeof payloadRecord.error === 'string'
+      ? payloadRecord.error
+      : response.status === 429
+        ? 'The analyzer is handling too many requests. Wait briefly, then retry this revision.'
+        : 'The analyzer returned an invalid response.'
+    const requestId = payloadRecord && typeof payloadRecord.request_id === 'string' ? payloadRecord.request_id : null
+    throw new Error(requestId ? `${baseMessage} Support reference: ${requestId}.` : baseMessage)
   }
   return payload as AnalyzeResponse
 }
@@ -758,7 +763,10 @@ export default function App() {
   const [copied, setCopied] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
   const [sourceOpen, setSourceOpen] = useState(true)
+  const [liveMessage, setLiveMessage] = useState('Ready to analyze a pinned source revision.')
   const controller = useRef<AbortController | null>(null)
+  const resultSummaryRef = useRef<HTMLDivElement | null>(null)
+  const focusResultAfterAnalysis = useRef(false)
   const selectedFixture = fixtureById(fixtureId)
   const sourceUrl = pinnedSourceUrl(identity)
   const activeFinding = report?.findings.find((finding) => finding.rule === activeRule) ?? null
@@ -768,7 +776,10 @@ export default function App() {
     let alive = true
     const timer = window.setTimeout(() => {
       sourceSha256(identity.source).then((hash) => {
-        if (alive) setSourceDigest(hash)
+        if (alive) {
+          setSourceDigest(hash)
+          setLiveMessage('Canonical source hash ready.')
+        }
       })
     }, 180)
     return () => {
@@ -776,6 +787,12 @@ export default function App() {
       window.clearTimeout(timer)
     }
   }, [identity.source])
+
+  useEffect(() => {
+    if (!report || !focusResultAfterAnalysis.current) return
+    focusResultAfterAnalysis.current = false
+    resultSummaryRef.current?.focus()
+  }, [report])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -789,6 +806,8 @@ export default function App() {
     controller.current = new AbortController()
     setLoading(true)
     setError(null)
+    setLiveMessage('Analyzing the exact source revision.')
+    focusResultAfterAnalysis.current = true
     try {
       const response = await analyzeRevision(sourceUrl, expectedDigest, usePreview ? identity.source : undefined, controller.current.signal)
       if (!await isReproducedResponse(identity, sourceDigest, response)) {
@@ -798,6 +817,7 @@ export default function App() {
       setSourceMode(response.source_mode)
       setSourceOpen(false)
       setSnapshotNotice(null)
+      setLiveMessage(`Local analysis complete. Overall result: ${response.report.status}.`)
       const record: HistoryRecord = {
         id: `${Date.now()}-${response.report.report_sha256}`,
         createdAt: new Date().toISOString(),
@@ -817,8 +837,10 @@ export default function App() {
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') return
       setError(caught instanceof Error ? caught.message : 'Analysis failed.')
+      setLiveMessage(caught instanceof Error ? `Analysis failed: ${caught.message}` : 'Analysis failed.')
       setReport(null)
       setSourceMode(null)
+      focusResultAfterAnalysis.current = false
     } finally {
       setLoading(false)
     }
@@ -827,6 +849,7 @@ export default function App() {
   const updateIdentity = (next: SourceIdentity) => {
     controller.current?.abort()
     setSourceDigest(null)
+    setLiveMessage('Source changed. Recomputing the canonical hash; the previous report was cleared.')
     setIdentity(next)
     setReport(null)
     setSourceMode(null)
@@ -854,10 +877,12 @@ export default function App() {
       await navigator.clipboard.writeText(url.toString())
       setShareError(null)
       setCopied(true)
+      setLiveMessage('Share snapshot link copied.')
       window.setTimeout(() => setCopied(false), 1600)
     } catch {
       setCopied(false)
       setShareError('Clipboard access failed. Copy the current address from the browser.')
+      setLiveMessage('Clipboard access failed. Copy the current address from the browser.')
     }
   }
 
@@ -886,6 +911,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</p>
       <a className="skip-link" href="#source-title">Skip to source</a>
       {report && <a className="skip-link skip-results" href="#spectrum-title">Skip to report</a>}
       <PolicyRail activeRule={activeRule} onSelect={setActiveRule} />
@@ -904,7 +930,7 @@ export default function App() {
             <span className="policy-chip">{POLICY_ID}</span>
             <button className="primary-action mobile-analyze-action" onClick={runAnalysis} disabled={loading || !sourceDigest}>
               {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
-              {loading ? 'Analyzing' : 'Analyze'}
+              {loading ? 'Analyzing' : report ? 'Reproduce analysis' : 'Analyze'}
             </button>
             <button onClick={share} className="icon-action" title="Copy a self-contained local snapshot link" disabled={!report || !sourceMode}>
               {copied ? <CheckIcon /> : <LinkIcon />}<span>{copied ? 'Copied' : report ? 'Share snapshot' : 'Run analysis to share'}</span>
@@ -951,8 +977,8 @@ export default function App() {
             </div>
 
             <div className="identity-readout">
-              <div><span>PINNED RAW URL</span><code>{sourceUrl}</code></div>
-              <div><span>CANONICAL SHA-256</span><code>{sourceDigest || 'computing'}</code></div>
+              <div><span>PINNED RAW URL</span><ExactValue label="Pinned raw URL" value={sourceUrl} onStatus={setLiveMessage} /></div>
+              <div><span>CANONICAL SHA-256</span><ExactValue label="Canonical SHA-256" value={sourceDigest || 'computing'} onStatus={setLiveMessage} /></div>
             </div>
 
             <div className={`source-authority ${usePreview ? 'source-authority-preview' : 'source-authority-pinned'}`} role="status">
@@ -976,7 +1002,7 @@ export default function App() {
               </div>
               <button className="primary-action analyze-action" onClick={runAnalysis} disabled={loading || !sourceDigest}>
                 {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
-                {loading ? 'Analyzing revision' : 'Analyze revision'}
+                {loading ? 'Analyzing revision' : report ? 'Reproduce analysis' : 'Analyze revision'}
                 {!loading && <ArrowRightIcon />}
               </button>
             </div>
@@ -1004,7 +1030,13 @@ export default function App() {
             )}
           </section>
 
-          {report && <div className="results-column" id="local-report">
+          {report && <div
+            className="results-column"
+            id="local-report"
+            ref={resultSummaryRef}
+            tabIndex={-1}
+            aria-label={`Local analysis result: ${report.status}`}
+          >
             <RuleSpectrum report={report} activeRule={activeRule} onSelect={setActiveRule} loading={loading} />
             <section className="finding-panel" aria-label="Selected rule evidence">
               <FindingReadout finding={activeFinding} activeRule={activeRule} report={report} />
@@ -1014,7 +1046,7 @@ export default function App() {
                   <dl>
                     <div><dt>SOURCE MODE</dt><dd>{sourceMode?.toUpperCase()}</dd></div>
                     <div><dt>SEVERITY</dt><dd>{report.severity}</dd></div>
-                    <div><dt>REPORT SHA-256</dt><dd>{shortHash(report.report_sha256, 14)}</dd></div>
+                    <div><dt>REPORT SHA-256</dt><dd><ExactValue label="Local report SHA-256" value={report.report_sha256} onStatus={setLiveMessage} /></dd></div>
                   </dl>
                 </div>
               )}
@@ -1027,9 +1059,7 @@ export default function App() {
         </p>}
 
         {report && (
-          <Suspense fallback={<section className="attestation-boundary attestation-loading" aria-live="polite">Loading registry integration…</section>}>
-            <AttestationBoundary report={report} sourceMode={sourceMode} />
-          </Suspense>
+          <AttestationBoundary report={report} sourceMode={sourceMode} />
         )}
         {history.length > 0 && <HistoryArchive records={history} selected={comparison} onToggle={toggleComparison} onRestore={restoreRecord} />}
 

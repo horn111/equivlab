@@ -5,20 +5,24 @@ import { SealCheckIcon } from '@phosphor-icons/react/SealCheck'
 import { SpinnerGapIcon } from '@phosphor-icons/react/SpinnerGap'
 import { WalletIcon } from '@phosphor-icons/react/Wallet'
 import { WarningCircleIcon } from '@phosphor-icons/react/WarningCircle'
-import { TransactionStatus, type TransactionHash } from 'genlayer-js/types'
+import type { TransactionHash, TransactionStatus } from 'genlayer-js/types'
 import {
   createGenLayerReadClient,
   createGenLayerWriteClient,
   isSuccessfulExecution,
   isUndeterminedReceipt,
   readAuthoritativeAudit,
+  readLatestAuthoritativeAudit,
   resolveGenLayerConfig,
   transactionExplorerUrl,
   type RegistryAddress,
 } from './genlayer'
+import ExactValue from './ExactValue'
 import type { AnalyzeResponse, AuditReport, OnChainReadback } from './types'
 
 const PENDING_KEY = 'equivlab:pending-attestation:v1'
+const ACCEPTED = 'ACCEPTED' as TransactionStatus
+const FINALIZED = 'FINALIZED' as TransactionStatus
 
 type LifecycleStage =
   | 'idle'
@@ -63,11 +67,6 @@ const STAGE_COPY: Record<LifecycleStage, string> = {
 
 const STEP_ORDER = ['submitted', 'consensus', 'finalizing', 'readback', 'complete'] as const
 
-function shortValue(value: string, width = 10): string {
-  if (value.length <= width * 2 + 1) return value
-  return `${value.slice(0, width)}…${value.slice(-width)}`
-}
-
 function pendingMatches(value: PendingAttestation, report: AuditReport, network: string, registryAddress: string): boolean {
   return value.network === network
     && value.registryAddress.toLowerCase() === registryAddress.toLowerCase()
@@ -91,24 +90,71 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
   const [error, setError] = useState<string | null>(resolution.error)
   const [transactionHash, setTransactionHash] = useState<TransactionHash | null>(null)
   const [readback, setReadback] = useState<OnChainReadback | null>(null)
+  const [existingLookup, setExistingLookup] = useState<'idle' | 'checking' | 'none' | 'found' | 'error'>('idle')
+  const [lookupError, setLookupError] = useState<string | null>(null)
+  const [announcement, setAnnouncement] = useState('')
   const [supersedesId, setSupersedesId] = useState('')
   const [challengeReasonHash, setChallengeReasonHash] = useState('')
   const [challengeTransactionHash, setChallengeTransactionHash] = useState<TransactionHash | null>(null)
   const [challengeBusy, setChallengeBusy] = useState(false)
 
+  const lookupExisting = useCallback(async () => {
+    if (!config || sourceMode !== 'retrieved') return
+    setLookupError(null)
+    setExistingLookup('checking')
+    setAnnouncement('Checking the registry for an existing audit of this exact source identity.')
+    try {
+      const client = await createGenLayerReadClient(config)
+      const existing = await readLatestAuthoritativeAudit(
+        client,
+        config,
+        report.source.canonical_sha256,
+        report.source.url,
+        report.policy,
+      )
+      if (existing) {
+        setReadback(existing)
+        setExistingLookup('found')
+        setStage('complete')
+        setAnnouncement(`Existing authoritative audit ${existing.audit.id} loaded. Result: ${existing.report.status}.`)
+      } else {
+        setReadback(null)
+        setExistingLookup('none')
+        setStage('idle')
+        setAnnouncement('No existing audit was found for this exact source identity and policy.')
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'Registry lookup failed.'
+      setReadback(null)
+      setExistingLookup('error')
+      setLookupError(message)
+      setStage('idle')
+      setAnnouncement(`Registry lookup failed: ${message}`)
+    }
+  }, [config, report, sourceMode])
+
   useEffect(() => {
-    if (!config) return
+    setTransactionHash(null)
+    setReadback(null)
+    setExistingLookup('idle')
+    setLookupError(null)
+    if (!config || sourceMode !== 'retrieved') return
     try {
       const raw = localStorage.getItem(PENDING_KEY)
-      if (!raw) return
-      const pending = JSON.parse(raw) as PendingAttestation
-      if (!pendingMatches(pending, report, config.network, config.registryAddress)) return
-      setTransactionHash(pending.transactionHash)
-      setStage('submitted')
+      if (raw) {
+        const pending = JSON.parse(raw) as PendingAttestation
+        if (pendingMatches(pending, report, config.network, config.registryAddress)) {
+          setTransactionHash(pending.transactionHash)
+          setStage('submitted')
+          setAnnouncement('A pending attestation transaction was restored. Reconcile it to continue.')
+          return
+        }
+      }
     } catch {
       localStorage.removeItem(PENDING_KEY)
     }
-  }, [config, report])
+    void lookupExisting()
+  }, [config, lookupExisting, report, sourceMode])
 
   const connectWallet = useCallback(async () => {
     if (!config) return
@@ -125,10 +171,11 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         throw new Error('The wallet returned no canonical account address.')
       }
       const nextAccount = accounts[0] as RegistryAddress
-      const client = createGenLayerWriteClient(config, nextAccount, window.ethereum)
+      const client = await createGenLayerWriteClient(config, nextAccount, window.ethereum)
       await client.connect(config.network)
       setAccount(nextAccount)
       setStage('ready')
+      setAnnouncement(`Wallet ${nextAccount} connected.`)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Wallet connection failed.')
       setStage('error')
@@ -141,11 +188,11 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     setReadback(null)
     setTransactionHash(hash)
     try {
-      const client = createGenLayerReadClient(config)
+      const client = await createGenLayerReadClient(config)
       setStage('consensus')
       const accepted = await client.waitForTransactionReceipt({
         hash,
-        status: TransactionStatus.ACCEPTED,
+        status: ACCEPTED,
         interval: 5_000,
         retries: 120,
       })
@@ -159,11 +206,11 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       }
 
       let finalized = accepted
-      if (accepted.statusName !== TransactionStatus.FINALIZED) {
+      if (accepted.statusName !== FINALIZED) {
         setStage('finalizing')
         finalized = await client.waitForTransactionReceipt({
           hash,
-          status: TransactionStatus.FINALIZED,
+          status: FINALIZED,
           interval: 5_000,
           retries: 200,
         })
@@ -182,8 +229,10 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         hash,
       )
       setReadback(authoritative)
+      setExistingLookup('found')
       localStorage.removeItem(PENDING_KEY)
       setStage('complete')
+      setAnnouncement(`Authoritative audit ${authoritative.audit.id} loaded. Result: ${authoritative.report.status}.`)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Transaction reconciliation failed.')
       setStage('error')
@@ -205,11 +254,14 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     setReadback(null)
     setStage('signing')
     try {
-      const client = createGenLayerWriteClient(config, account, window.ethereum)
+      const client = await createGenLayerWriteClient(config, account, window.ethereum)
+      const supersededAuditId = supersedesId.trim()
       const submitted = await client.writeContract({
         address: config.registryAddress,
-        functionName: 'request_audit',
-        args: [report.source.url, report.source.canonical_sha256, report.policy, supersedesId.trim()],
+        functionName: supersededAuditId ? 'request_superseding_audit' : 'request_audit',
+        args: supersededAuditId
+          ? [report.source.url, report.source.canonical_sha256, report.policy, BigInt(supersededAuditId)]
+          : [report.source.url, report.source.canonical_sha256, report.policy],
         value: 0n,
       })
       if (typeof submitted !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(submitted)) {
@@ -227,6 +279,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       localStorage.setItem(PENDING_KEY, JSON.stringify(pending))
       setTransactionHash(hash)
       setStage('submitted')
+      setAnnouncement(`Attestation transaction ${hash} submitted.`)
       await reconcile(hash)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Attestation transaction was not submitted.')
@@ -244,7 +297,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     setError(null)
     setChallengeBusy(true)
     try {
-      const writeClient = createGenLayerWriteClient(config, account, window.ethereum)
+      const writeClient = await createGenLayerWriteClient(config, account, window.ethereum)
       const submitted = await writeClient.writeContract({
         address: config.registryAddress,
         functionName: 'challenge',
@@ -256,17 +309,17 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       }
       const hash = submitted as TransactionHash
       setChallengeTransactionHash(hash)
-      const readClient = createGenLayerReadClient(config)
+      const readClient = await createGenLayerReadClient(config)
       const receipt = await readClient.waitForTransactionReceipt({
         hash,
-        status: TransactionStatus.FINALIZED,
+        status: FINALIZED,
         interval: 5_000,
         retries: 200,
       })
       if (!isSuccessfulExecution(receipt)) {
         throw new Error(`Challenge execution did not return successfully (${receipt.txExecutionResultName ?? 'execution result unavailable'}).`)
       }
-      const updated = await readAuthoritativeAudit(
+      const updated = await readLatestAuthoritativeAudit(
         readClient,
         config,
         report.source.canonical_sha256,
@@ -274,8 +327,10 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         report.policy,
         readback.transactionHash,
       )
+      if (!updated) throw new Error('The challenged audit could not be read back from the registry.')
       setReadback(updated)
       setChallengeReasonHash('')
+      setAnnouncement(`Challenge finalized for audit ${updated.audit.id}.`)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Challenge transaction failed.')
     } finally {
@@ -286,10 +341,20 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
   const explorerUrl = config && transactionHash ? transactionExplorerUrl(config, transactionHash) : null
   const challengeExplorerUrl = config && challengeTransactionHash ? transactionExplorerUrl(config, challengeTransactionHash) : null
   const currentPosition = stagePosition(stage)
-  const busy = ['connecting', 'signing', 'consensus', 'finalizing', 'readback'].includes(stage)
+  const busy = existingLookup === 'checking' || ['connecting', 'signing', 'consensus', 'finalizing', 'readback'].includes(stage)
+  const authorityCopy = existingLookup === 'checking'
+    ? 'Checking this exact source identity against the registry.'
+    : existingLookup === 'none'
+      ? 'No existing audit for this exact source identity and policy.'
+      : existingLookup === 'found'
+        ? STAGE_COPY.complete
+        : existingLookup === 'error'
+          ? 'Registry lookup failed. No absence claim is made.'
+          : config ? STAGE_COPY[stage] : 'SEPARATE AUTHORITY · NO ON-CHAIN RECORD'
 
   return (
     <section className={`attestation-boundary ${config ? 'attestation-configured' : 'attestation-unconfigured'}`} aria-labelledby="attestation-title">
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
       <div className="attestation-copy">
         <h2 id="attestation-title">Registry boundary</h2>
         <p>{config
@@ -299,12 +364,12 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
 
       <dl className="network-readout">
         <div><dt>NETWORK</dt><dd>{config?.network ?? 'NOT CONFIGURED'}</dd></div>
-        <div><dt>REGISTRY</dt><dd>{config ? shortValue(config.registryAddress, 7) : 'NOT CONFIGURED'}</dd></div>
-        <div><dt>WALLET</dt><dd>{account ? shortValue(account, 7) : 'NOT CONNECTED'}</dd></div>
+        <div><dt>REGISTRY</dt><dd>{config ? <ExactValue label="Registry address" value={config.registryAddress} onStatus={setAnnouncement} /> : 'NOT CONFIGURED'}</dd></div>
+        <div><dt>WALLET</dt><dd>{account ? <ExactValue label="Wallet address" value={account} onStatus={setAnnouncement} /> : 'NOT CONNECTED'}</dd></div>
       </dl>
 
       <div className="boundary-actions">
-        <span className="authority-state">{config ? STAGE_COPY[stage] : 'SEPARATE AUTHORITY · NO ON-CHAIN RECORD'}</span>
+        <span className="authority-state">{authorityCopy}</span>
         {config && !account && (
           <button className="secondary-action" onClick={connectWallet} disabled={busy}>
             {stage === 'connecting' ? <SpinnerGapIcon className="spin" /> : <WalletIcon />}
@@ -314,7 +379,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         {config && account && sourceMode !== 'retrieved' && (
           <span className="remote-source-required">REMOTE REPRODUCTION REQUIRED</span>
         )}
-        {config && account && sourceMode === 'retrieved' && !transactionHash && (
+        {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
           <button className="primary-action" onClick={requestAttestation} disabled={busy}>
             {stage === 'signing' ? <SpinnerGapIcon className="spin" /> : <SealCheckIcon />}
             {stage === 'signing' ? 'Awaiting signature' : 'Request attestation'}
@@ -328,7 +393,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         )}
       </div>
 
-      {config && account && sourceMode === 'retrieved' && !transactionHash && (
+      {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
         <label className="supersedes-field">
           <span>SUPERSEDES AUDIT ID · OPTIONAL</span>
           <input
@@ -345,7 +410,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         <div className="transaction-evidence" aria-live="polite">
           <div className="transaction-identity">
             <span>TRANSACTION</span>
-            <code>{transactionHash}</code>
+            <ExactValue label="Transaction hash" value={transactionHash} onStatus={setAnnouncement} />
             {explorerUrl && <a href={explorerUrl} target="_blank" rel="noreferrer">Open explorer <ArrowSquareOutIcon /></a>}
           </div>
           <ol className="transaction-lifecycle" aria-label="Attestation transaction lifecycle">
@@ -365,11 +430,11 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
           </div>
           <dl>
             <div><dt>AUDIT ID</dt><dd>{readback.audit.id}</dd></div>
-            <div><dt>REPORT SHA-256</dt><dd>{shortValue(readback.report.report_sha256, 12)}</dd></div>
-            <div><dt>REQUESTER</dt><dd>{shortValue(readback.audit.requester, 8)}</dd></div>
+            <div><dt>REPORT SHA-256</dt><dd><ExactValue label="Report SHA-256" value={readback.report.report_sha256} onStatus={setAnnouncement} /></dd></div>
+            <div><dt>REQUESTER</dt><dd><ExactValue label="Requester address" value={readback.audit.requester} onStatus={setAnnouncement} /></dd></div>
             <div><dt>CHALLENGED</dt><dd>{readback.audit.challenged ? 'YES' : 'NO'}</dd></div>
           </dl>
-          {!readback.audit.challenged && account && (
+          {account && (
             <div className="challenge-control">
               <label>
                 <span>CHALLENGE REASON SHA-256</span>
@@ -377,7 +442,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
               </label>
               <button className="secondary-action" onClick={challengeAttestation} disabled={challengeBusy}>
                 {challengeBusy ? <SpinnerGapIcon className="spin" /> : <WarningCircleIcon />}
-                {challengeBusy ? 'Finalizing challenge' : 'Record challenge'}
+                {challengeBusy ? 'Finalizing challenge' : readback.audit.challenged ? 'Record another challenge' : 'Record challenge'}
               </button>
             </div>
           )}
@@ -385,6 +450,13 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         </section>
       )}
 
+      {lookupError && (
+        <div className="registry-lookup-error" role="alert">
+          <WarningCircleIcon aria-hidden="true" />
+          <span>Registry lookup failed: {lookupError}</span>
+          <button className="secondary-action" type="button" onClick={() => void lookupExisting()}>Retry registry lookup</button>
+        </div>
+      )}
       {error && <p className="inline-error" role="alert"><WarningCircleIcon aria-hidden="true" />{error}</p>}
     </section>
   )

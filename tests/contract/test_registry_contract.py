@@ -112,9 +112,12 @@ def load_contract_module():
     registry = module.ConsensusSafetyRegistry()
     registry.audits = []
     registry.reports = []
-    registry.latest_by_source_policy = {}
+    registry.latest_by_source_identity_policy = {}
     registry.superseded_by = {}
-    registry.challenge_reason_by_audit = {}
+    registry.challenges = []
+    registry.challenge_ids_by_audit = {}
+    registry.challenge_count_by_audit = {}
+    registry.next_challenge_id = 0
     return module, registry, runtime
 
 
@@ -131,13 +134,11 @@ def arrange_consensus(runtime: FakeRuntime, source: str, semantic: object = EMPT
     runtime.llm_values = [semantic, semantic]
 
 
-def request(registry, source: str, name: str, supersedes_id: str = ""):
-    return registry.request_audit(
-        pinned_url(name),
-        canonical_sha256(source),
-        "gl-consensus-baseline-1",
-        supersedes_id,
-    )
+def request(registry, source: str, name: str, supersedes_id: int | None = None):
+    args = (pinned_url(name), canonical_sha256(source), "gl-consensus-baseline-1")
+    if supersedes_id is None:
+        return registry.request_audit(*args)
+    return registry.request_superseding_audit(*args, supersedes_id)
 
 
 def report(registry, audit_id: int) -> dict[str, object]:
@@ -206,7 +207,6 @@ def test_hash_mismatch_finalizes_unverifiable() -> None:
         pinned_url("hardened_fact_checker"),
         "0" * 64,
         "gl-consensus-baseline-1",
-        "",
     )
 
     stored = report(registry, audit_id)
@@ -257,12 +257,26 @@ def test_duplicate_source_policy_audit_is_rejected() -> None:
     arrange_consensus(runtime, source)
     request(registry, source, "hardened_fact_checker")
 
-    with pytest.raises(ValueError, match="duplicate source and policy audit"):
+    with pytest.raises(ValueError, match="duplicate source identity and policy audit"):
         request(registry, source, "hardened_fact_checker")
 
 
-def test_challenge_preserves_report_and_records_reason() -> None:
+def test_same_bytes_at_distinct_urls_do_not_preempt_each_other() -> None:
     _module, registry, runtime = load_contract_module()
+    source = fixture_source("hardened_fact_checker")
+    source_hash = canonical_sha256(source)
+    arrange_consensus(runtime, source)
+    first = request(registry, source, "mirror_one")
+    arrange_consensus(runtime, source)
+    second = request(registry, source, "mirror_two")
+
+    assert first == 0 and second == 1
+    assert registry.get_latest(pinned_url("mirror_one"), source_hash, "gl-consensus-baseline-1") == "0"
+    assert registry.get_latest(pinned_url("mirror_two"), source_hash, "gl-consensus-baseline-1") == "1"
+
+
+def test_challenges_are_append_only_and_preserve_report() -> None:
+    module, registry, runtime = load_contract_module()
     source = fixture_source("hardened_fact_checker")
     arrange_consensus(runtime, source)
     audit_id = request(registry, source, "hardened_fact_checker")
@@ -270,13 +284,25 @@ def test_challenge_preserves_report_and_records_reason() -> None:
     reason_hash = "a" * 64
 
     assert registry.challenge(audit_id, reason_hash) == "0"
+    module.gl.message.sender_address = "0xsecond-challenger"
+    assert registry.challenge(audit_id, "b" * 64) == "1"
 
     stored_audit = audit(registry, audit_id)
     assert stored_audit["challenged"] is True
-    assert stored_audit["challenge_reason_hash"] == reason_hash
+    assert stored_audit["challenge_count"] == 2
+    assert registry.get_challenge_count(audit_id) == 2
+    first = json.loads(registry.get_challenge(0))
+    second = json.loads(registry.get_audit_challenge(audit_id, 1))
+    assert first == {
+        "audit_id": "0",
+        "challenged_at": "2026-08-24T12:00:00Z",
+        "challenger": "0xrequester",
+        "id": "0",
+        "reason_hash": reason_hash,
+    }
+    assert second["challenger"] == "0xsecond-challenger"
+    assert second["reason_hash"] == "b" * 64
     assert registry.get_report(audit_id) == original_report
-    with pytest.raises(ValueError, match="already challenged"):
-        registry.challenge(audit_id, reason_hash)
 
 
 def test_fixed_revision_supersedes_without_erasing_history() -> None:
@@ -286,13 +312,28 @@ def test_fixed_revision_supersedes_without_erasing_history() -> None:
     arrange_consensus(runtime, original)
     first_id = request(registry, original, "hardened_fact_checker")
     arrange_consensus(runtime, fixed)
-    second_id = request(registry, fixed, "hardened_fact_checker_v2", supersedes_id="0")
+    second_id = request(registry, fixed, "hardened_fact_checker_v2", supersedes_id=0)
 
     assert first_id == 0 and second_id == 1
     assert audit(registry, first_id)["superseded_by"] == "1"
     assert audit(registry, second_id)["supersedes_id"] == "0"
     assert json.loads(registry.get_report(first_id))["status"] == "MEETS_BASELINE"
     assert registry.count() == 2
+
+
+def test_only_original_requester_may_supersede() -> None:
+    module, registry, runtime = load_contract_module()
+    original = fixture_source("hardened_fact_checker")
+    arrange_consensus(runtime, original)
+    request(registry, original, "hardened_fact_checker")
+    module.gl.message.sender_address = "0xattacker"
+    fixed = original + "\n# attacker revision\n"
+
+    with pytest.raises(ValueError, match="only the original requester"):
+        request(registry, fixed, "attacker_revision", supersedes_id=0)
+
+    assert audit(registry, 0)["superseded_by"] is None
+    assert registry.count() == 1
 
 
 def test_latest_lookup_and_report_hash_are_stable() -> None:
@@ -305,8 +346,83 @@ def test_latest_lookup_and_report_hash_are_stable() -> None:
     stored = report(registry, audit_id)
     claimed = stored.pop("report_sha256")
     assert claimed == module._sha256_text(module._canonical_json(stored))
-    assert registry.get_latest(source_hash, "gl-consensus-baseline-1") == "0"
-    assert registry.get_latest("f" * 64, "gl-consensus-baseline-1") == ""
+    assert registry.get_latest(pinned_url("hardened_fact_checker"), source_hash, "gl-consensus-baseline-1") == "0"
+    assert registry.get_latest(pinned_url("hardened_fact_checker"), "f" * 64, "gl-consensus-baseline-1") == ""
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        f"https://user@raw.githubusercontent.com/equivlab/demo/{COMMIT}/contract.py",
+        f"https://raw.githubusercontent.com:443/equivlab/demo/{COMMIT}/contract.py",
+        f"https://raw.githubusercontent.com/equivlab/demo/{COMMIT}/contract.py?raw=1",
+        f"https://raw.githubusercontent.com/equivlab/demo/{COMMIT}/contract.py#fragment",
+        f"https://raw.githubusercontent.com/equivlab/demo/{COMMIT}/%2e%2e/contract.py",
+        f"https://raw.githubusercontent.com/equivlab/demo/{COMMIT}/nested%2fcontract.py",
+        "https://raw.githubusercontent.com/equivlab/demo/main/contract.py",
+    ],
+)
+def test_source_url_rejects_noncanonical_or_unpinned_forms(source_url: str) -> None:
+    _module, registry, _runtime = load_contract_module()
+    with pytest.raises(ValueError, match="source URL"):
+        registry.request_audit(source_url, "a" * 64, "gl-consensus-baseline-1")
+
+
+def _transfer_contract(guard: str) -> str:
+    return f'''from genlayer import *
+
+class Vault(gl.Contract):
+    owner: Address
+    enabled: bool
+    paused: bool
+
+    @gl.public.write
+    def withdraw(self, recipient: str):
+{guard}
+        gl.eth_transfer(Address(recipient), self.balance)
+'''
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "        assert gl.message.sender_address != self.owner",
+        "        assert gl.message.sender_address == self.owner or gl.message.sender_address != self.owner",
+        "        assert gl.message.sender_address == self.owner or self.enabled",
+        "        if gl.message.sender_address == self.owner:\n            raise ValueError('blocked')",
+        "        if gl.message.sender_address != self.owner:\n            pass\n        else:\n            raise ValueError('blocked')",
+        "        if gl.message.sender_address != self.owner and self.enabled:\n            raise ValueError('blocked')",
+        "        if self.enabled:\n            if gl.message.sender_address != self.owner:\n                raise ValueError('blocked')",
+        "        if gl.message.sender_address != self.owner:\n            self.log_attempt()\n            raise ValueError('blocked')",
+        "        actor = gl.message.sender_address\n        actor = self.owner\n        assert actor == self.owner",
+        "        assert self.owner in gl.message.sender_address",
+        "        assert gl.message.sender_address == self.owner, self.log_attempt()",
+    ],
+)
+def test_adversarial_authority_guards_fail_closed(guard: str) -> None:
+    module, _registry, _runtime = load_contract_module()
+    failed = module._deterministic_findings(_transfer_contract(guard), pinned_url("authority_case"))
+    assert "AUTH-01" in failed
+    assert "VALUE-01" in failed
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "        assert gl.message.sender_address == self.owner",
+        "        assert gl.message.sender_address == self.owner and self.enabled",
+        "        if gl.message.sender_address != self.owner:\n            raise ValueError('unauthorized')",
+        "        if gl.message.sender_address != self.owner or self.paused:\n            raise ValueError('blocked')",
+        "        if gl.message.sender_address == self.owner:\n            pass\n        else:\n            raise ValueError('unauthorized')",
+        "        caller = gl.message.sender_address\n        owner = self.owner\n        assert caller == owner",
+        "        assert gl.message.sender_address in self.owners",
+    ],
+)
+def test_valid_authority_guards_are_recognized(guard: str) -> None:
+    module, _registry, _runtime = load_contract_module()
+    failed = module._deterministic_findings(_transfer_contract(guard), pinned_url("authority_case"))
+    assert "AUTH-01" not in failed
+    assert "VALUE-01" not in failed
 
 
 def test_observation_validator_rejects_inconsistent_consensus_fields() -> None:

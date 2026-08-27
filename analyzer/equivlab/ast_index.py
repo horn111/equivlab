@@ -101,9 +101,13 @@ class FunctionInfo:
 
 
 class _DependencyResolver:
-    def __init__(self, parameters: Iterable[str], assignments: dict[str, ast.AST]):
+    def __init__(self, parameters: Iterable[str], assignments: dict[str, list[ast.AST]]):
         self.parameters = set(parameters)
         self.assignments = assignments
+
+    def _assignments_before(self, name: str, node: ast.AST) -> list[ast.AST]:
+        use_line = getattr(node, "lineno", 0)
+        return [value for value in self.assignments.get(name, []) if getattr(value, "lineno", 0) < use_line]
 
     def dependencies(self, node: ast.AST | None, seen: frozenset[str] = frozenset()) -> set[str]:
         if node is None:
@@ -120,8 +124,12 @@ class _DependencyResolver:
         if isinstance(node, ast.Name):
             if node.id in self.parameters:
                 return {f"parameter:{node.id}"}
-            if node.id in self.assignments and node.id not in seen:
-                return self.dependencies(self.assignments[node.id], seen | {node.id})
+            assignments = self._assignments_before(node.id, node)
+            if assignments and node.id not in seen:
+                result: set[str] = set()
+                for assignment in assignments:
+                    result.update(self.dependencies(assignment, seen | {node.id}))
+                return result
             return set()
         if isinstance(node, ast.Call) and dotted_name(node.func) == "gl.vm.run_nondet_unsafe":
             return {"consensus-result"}
@@ -136,8 +144,10 @@ class _DependencyResolver:
         return result
 
     def source(self, node: ast.AST | None, seen: frozenset[str] = frozenset()) -> str:
-        if isinstance(node, ast.Name) and node.id in self.assignments and node.id not in seen:
-            return self.source(self.assignments[node.id], seen | {node.id})
+        if isinstance(node, ast.Name) and node.id not in seen:
+            assignments = self._assignments_before(node.id, node)
+            if assignments:
+                return self.source(assignments[-1], seen | {node.id})
         return rendered(node)
 
 
@@ -145,19 +155,81 @@ def _contains_blocking(statements: list[ast.stmt]) -> bool:
     return any(isinstance(node, (ast.Raise, ast.Return)) for statement in statements for node in ast.walk(statement))
 
 
-def _is_authority_guard(node: ast.If, resolver: _DependencyResolver) -> bool:
-    dependencies = resolver.dependencies(node.test)
-    if "sender" not in dependencies or "state" not in dependencies:
-        return False
-    if _contains_blocking(node.body):
-        if isinstance(node.test, ast.Compare) and any(isinstance(op, (ast.NotEq, ast.NotIn)) for op in node.test.ops):
-            return True
-        if isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not):
-            return True
-    if _contains_blocking(node.orelse):
-        if isinstance(node.test, ast.Compare) and any(isinstance(op, (ast.Eq, ast.In)) for op in node.test.ops):
-            return True
+def _statement_always_blocks(statement: ast.stmt) -> bool:
+    """Return whether reaching *statement* cannot continue to its successor.
+
+    This deliberately recognizes only a small, deterministic subset of Python
+    control flow.  Merely containing a nested ``raise`` is not enough: an
+    authority check must fail closed on every path through the rejecting suite.
+    """
+
+    if isinstance(statement, (ast.Raise, ast.Return)):
+        return True
+    if isinstance(statement, ast.If):
+        return bool(statement.orelse) and _suite_always_blocks(statement.body) and _suite_always_blocks(statement.orelse)
     return False
+
+
+def _suite_always_blocks(statements: list[ast.stmt]) -> bool:
+    # Accept only an immediate terminal statement.  Treating a later raise as a
+    # guard would bless calls or transfers that execute first in the rejecting
+    # branch.
+    return bool(statements) and _statement_always_blocks(statements[0])
+
+
+def _sender_state_orientation(left: ast.AST, right: ast.AST, resolver: _DependencyResolver) -> str | None:
+    left_dependencies = resolver.dependencies(left)
+    right_dependencies = resolver.dependencies(right)
+    if left_dependencies == {"sender"} and right_dependencies == {"state"}:
+        return "sender-left"
+    if left_dependencies == {"state"} and right_dependencies == {"sender"}:
+        return "sender-right"
+    return None
+
+
+def _condition_entails_authority(node: ast.AST, truth: bool, resolver: _DependencyResolver) -> bool:
+    """Conservatively prove that a condition outcome authorizes the sender.
+
+    Equality (or membership) is the allow condition.  Boolean combinations are
+    accepted only where the requested truth value forces an authority-bearing
+    operand to have the required value.  This rejects tautologies and partial
+    guards such as ``sender == owner or emergency``.
+    """
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _condition_entails_authority(node.operand, not truth, resolver)
+
+    if isinstance(node, ast.BoolOp):
+        if isinstance(node.op, ast.And) and truth:
+            return any(_condition_entails_authority(value, True, resolver) for value in node.values)
+        if isinstance(node.op, ast.Or) and not truth:
+            return any(_condition_entails_authority(value, False, resolver) for value in node.values)
+        return False
+
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        return False
+    orientation = _sender_state_orientation(node.left, node.comparators[0], resolver)
+    if orientation is None:
+        return False
+
+    operator = node.ops[0]
+    if isinstance(operator, ast.Eq):
+        return truth
+    if isinstance(operator, ast.NotEq):
+        return not truth
+    if isinstance(operator, ast.In) and orientation == "sender-left":
+        return truth
+    if isinstance(operator, ast.NotIn) and orientation == "sender-left":
+        return not truth
+    return False
+
+
+def _is_authority_guard(node: ast.If, resolver: _DependencyResolver) -> bool:
+    body_rejects = _suite_always_blocks(node.body)
+    else_rejects = bool(node.orelse) and _suite_always_blocks(node.orelse)
+    return (body_rejects and _condition_entails_authority(node.test, False, resolver)) or (
+        else_rejects and _condition_entails_authority(node.test, True, resolver)
+    )
 
 
 _TERMINAL_MARKERS = ("settled", "withdrawn", "paid", "claimed", "completed", "processed", "finalized")
@@ -166,7 +238,7 @@ _PROMPT_MARKERS = ("UNTRUSTED EVIDENCE", "UNTRUSTED_EVIDENCE", "EVIDENCE (DATA O
 
 class _AssignmentCollector(ast.NodeVisitor):
     def __init__(self) -> None:
-        self.assignments: dict[str, ast.AST] = {}
+        self.assignments: dict[str, list[ast.AST]] = {}
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return
@@ -180,18 +252,19 @@ class _AssignmentCollector(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         for target in node.targets:
             if isinstance(target, ast.Name):
-                self.assignments[target.id] = node.value
+                self.assignments.setdefault(target.id, []).append(node.value)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if isinstance(node.target, ast.Name) and node.value is not None:
-            self.assignments[node.target.id] = node.value
+            self.assignments.setdefault(node.target.id, []).append(node.value)
         self.generic_visit(node)
 
 
 class _FunctionScanner(ast.NodeVisitor):
     def __init__(self, info: FunctionInfo, node: ast.FunctionDef | ast.AsyncFunctionDef):
         self.info = info
+        self.top_level_statement_ids = {id(statement) for statement in node.body}
         collector = _AssignmentCollector()
         for statement in node.body:
             collector.visit(statement)
@@ -244,7 +317,7 @@ class _FunctionScanner(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_If(self, node: ast.If) -> None:
-        if _is_authority_guard(node, self.resolver):
+        if id(node) in self.top_level_statement_ids and _is_authority_guard(node, self.resolver):
             self.info.authority_guards.append(AuthorityGuard(node.lineno, rendered(node.test)))
         expression = rendered(node.test)
         expression_lower = expression.lower()
@@ -273,8 +346,14 @@ class _FunctionScanner(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Assert(self, node: ast.Assert) -> None:
-        dependencies = self.resolver.dependencies(node.test)
-        if "sender" in dependencies and "state" in dependencies:
+        message_has_effects = node.msg is not None and any(
+            isinstance(item, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr)) for item in ast.walk(node.msg)
+        )
+        if (
+            id(node) in self.top_level_statement_ids
+            and not message_has_effects
+            and _condition_entails_authority(node.test, True, self.resolver)
+        ):
             self.info.authority_guards.append(AuthorityGuard(node.lineno, rendered(node.test)))
         self.generic_visit(node)
 

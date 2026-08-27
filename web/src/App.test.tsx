@@ -126,6 +126,10 @@ describe('Phase 4 workbench', () => {
     expect(screen.getAllByText('VALUE-01').length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /request attestation/i })).not.toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: /registry boundary/i })).toBeInTheDocument()
+    expect(screen.getByLabelText('Local analysis result: FAIL')).toHaveFocus()
+    expect(screen.getAllByRole('button', { name: /reproduce analysis/i })).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /reveal pinned raw url/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /copy canonical sha-256/i })).toBeInTheDocument()
   })
 
   it('invalidates a report when the visible source identity changes', async () => {
@@ -183,6 +187,22 @@ describe('Phase 4 workbench', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not be reproduced/i)
     expect(screen.queryByText(/no preceding caller-derived authority guard/i)).not.toBeInTheDocument()
+  })
+
+  it('surfaces a compact analyzer support reference without exposing internals', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({ error: 'Rate limit reached. Retry shortly.', request_id: 'req_4f9c2a' }),
+    }))
+    render(<App />)
+
+    const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
+    await waitFor(() => expect(analyzeButton).toBeEnabled())
+    await user.click(analyzeButton)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Rate limit reached. Retry shortly. Support reference: req_4f9c2a.')
   })
 
   it('disables analysis immediately while a changed source digest is pending', async () => {

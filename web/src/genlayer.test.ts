@@ -4,6 +4,7 @@ import {
   isSuccessfulExecution,
   isUndeterminedReceipt,
   readAuthoritativeAudit,
+  readLatestAuthoritativeAudit,
   resolveGenLayerConfig,
   transactionExplorerUrl,
 } from './genlayer'
@@ -87,5 +88,27 @@ describe('authoritative readback', () => {
     expect(result.audit.id).toBe('7')
     expect(result.report.status).toBe('FAIL')
     expect(readContract).toHaveBeenCalledTimes(3)
+    expect(readContract).toHaveBeenNthCalledWith(1, {
+      address: ADDRESS,
+      functionName: 'get_latest',
+      args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-1'],
+    })
+  })
+
+  it('returns an explicit empty result when no exact source identity is registered', async () => {
+    const readContract = vi.fn().mockResolvedValue('')
+    const config = resolveGenLayerConfig({ VITE_NETWORK_NAME: 'testnetBradbury', VITE_REGISTRY_ADDRESS: ADDRESS } as ImportMetaEnv).config!
+    await expect(readLatestAuthoritativeAudit(
+      { readContract } as never,
+      config,
+      SOURCE_HASH,
+      SOURCE_URL,
+      'gl-consensus-baseline-1',
+    )).resolves.toBeNull()
+    expect(readContract).toHaveBeenCalledWith({
+      address: ADDRESS,
+      functionName: 'get_latest',
+      args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-1'],
+    })
   })
 })

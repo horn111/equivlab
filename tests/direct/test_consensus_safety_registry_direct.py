@@ -70,8 +70,11 @@ def install_semantic(vm, payload: object) -> None:
     vm.mock_llm(r"(?s).*UNTRUSTED_CONTRACT_SOURCE.*", json.dumps(payload))
 
 
-def request(contract, name: str, source: str, supersedes: str = ""):
-    return contract.request_audit(pinned_url(name), source_hash(source), POLICY, supersedes)
+def request(contract, name: str, source: str, supersedes: int | None = None):
+    args = (pinned_url(name), source_hash(source), POLICY)
+    if supersedes is None:
+        return contract.request_audit(*args)
+    return contract.request_superseding_audit(*args, supersedes)
 
 
 def deploy_registry(direct_deploy):
@@ -157,9 +160,44 @@ def test_direct_hash_mismatch_is_unverifiable(direct_vm, direct_deploy):
     source = fixture_source("hardened_fact_checker")
     install_source(direct_vm, "hardened_fact_checker", source)
 
-    audit_id = contract.request_audit(pinned_url("hardened_fact_checker"), "0" * 64, POLICY, "")
+    audit_id = contract.request_audit(pinned_url("hardened_fact_checker"), "0" * 64, POLICY)
 
     assert json.loads(contract.get_report(audit_id))["status"] == "UNVERIFIABLE"
+
+
+def test_direct_full_source_identity_keeps_mirrors_independent(direct_vm, direct_deploy):
+    contract = deploy_registry(direct_deploy)
+    source = fixture_source("hardened_fact_checker")
+    install_source(direct_vm, "mirror_one", source)
+    install_semantic(direct_vm, EMPTY_SEMANTIC)
+    first = request(contract, "mirror_one", source)
+    install_source(direct_vm, "mirror_two", source)
+    install_semantic(direct_vm, EMPTY_SEMANTIC)
+    second = request(contract, "mirror_two", source)
+
+    assert first == 0 and second == 1
+    assert contract.get_latest(pinned_url("mirror_one"), source_hash(source), POLICY) == "0"
+    assert contract.get_latest(pinned_url("mirror_two"), source_hash(source), POLICY) == "1"
+
+
+def test_direct_inverted_assert_is_not_an_authority_guard(direct_vm, direct_deploy):
+    contract = deploy_registry(direct_deploy)
+    source = '''from genlayer import *
+
+class Vault(gl.Contract):
+    owner: Address
+
+    @gl.public.write
+    def withdraw(self, recipient: str):
+        assert gl.message.sender_address != self.owner
+        gl.eth_transfer(Address(recipient), self.balance)
+'''
+    install_source(direct_vm, "inverted_assert", source)
+    audit_id = request(contract, "inverted_assert", source)
+
+    stored = json.loads(contract.get_report(audit_id))
+    assert stored["status"] == "FAIL"
+    assert stored["failed_rules"] == ["AUTH-01", "VALUE-01"]
 
 
 def test_direct_duplicate_challenge_and_supersession(direct_vm, direct_deploy):
@@ -169,16 +207,22 @@ def test_direct_duplicate_challenge_and_supersession(direct_vm, direct_deploy):
     install_semantic(direct_vm, EMPTY_SEMANTIC)
     first = request(contract, "hardened_fact_checker", source)
 
-    with direct_vm.expect_revert("duplicate source and policy audit"):
+    with direct_vm.expect_revert("duplicate source identity and policy audit"):
         request(contract, "hardened_fact_checker", source)
 
     assert contract.challenge(first, "a" * 64) == "0"
-    assert json.loads(contract.get_audit(first))["challenged"] is True
+    assert contract.challenge(first, "b" * 64) == "1"
+    stored_first = json.loads(contract.get_audit(first))
+    assert stored_first["challenged"] is True
+    assert stored_first["challenge_count"] == 2
+    assert contract.get_challenge_count(first) == 2
+    assert json.loads(contract.get_audit_challenge(first, 0))["reason_hash"] == "a" * 64
+    assert json.loads(contract.get_challenge(1))["reason_hash"] == "b" * 64
 
     fixed = source + "\n# follow-up revision\n"
     install_source(direct_vm, "hardened_fact_checker_v2", fixed)
     install_semantic(direct_vm, EMPTY_SEMANTIC)
-    second = request(contract, "hardened_fact_checker_v2", fixed, "0")
+    second = request(contract, "hardened_fact_checker_v2", fixed, 0)
 
     assert json.loads(contract.get_audit(first))["superseded_by"] == "1"
     assert json.loads(contract.get_audit(second))["supersedes_id"] == "0"

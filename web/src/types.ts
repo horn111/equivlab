@@ -96,5 +96,5 @@ export interface OnChainAuditRecord {
 export interface OnChainReadback {
   audit: OnChainAuditRecord
   report: AuditReport
-  transactionHash: TransactionHash
+  transactionHash: TransactionHash | null
 }

@@ -1,4 +1,3 @@
-import { createClient } from 'genlayer-js'
 import { localnet, studionet, testnetAsimov, testnetBradbury } from 'genlayer-js/chains'
 import type { GenLayerClient, GenLayerTransaction, TransactionHash } from 'genlayer-js/types'
 import type { AuditReport, OnChainAuditRecord, OnChainReadback } from './types'
@@ -6,7 +5,8 @@ import type { AuditReport, OnChainAuditRecord, OnChainReadback } from './types'
 export const SUPPORTED_NETWORKS = ['localnet', 'studionet', 'testnetAsimov', 'testnetBradbury'] as const
 export type SupportedNetwork = (typeof SUPPORTED_NETWORKS)[number]
 export type RegistryAddress = `0x${string}`
-export type WalletProvider = NonNullable<NonNullable<Parameters<typeof createClient>[0]>['provider']>
+type CreateClient = typeof import('genlayer-js')['createClient']
+export type WalletProvider = NonNullable<NonNullable<Parameters<CreateClient>[0]>['provider']>
 
 const NETWORKS = {
   localnet,
@@ -25,6 +25,13 @@ export interface GenLayerConfig {
 export interface ConfigResolution {
   config: GenLayerConfig | null
   error: string | null
+}
+
+let createClientPromise: Promise<CreateClient> | null = null
+
+function loadCreateClient(): Promise<CreateClient> {
+  createClientPromise ??= import('genlayer-js').then((module) => module.createClient)
+  return createClientPromise
 }
 
 function cleanOptionalUrl(value: string | undefined): string | undefined {
@@ -64,11 +71,13 @@ export function resolveGenLayerConfig(env: ImportMetaEnv): ConfigResolution {
   }
 }
 
-export function createGenLayerReadClient(config: GenLayerConfig) {
+export async function createGenLayerReadClient(config: GenLayerConfig) {
+  const createClient = await loadCreateClient()
   return createClient({ chain: NETWORKS[config.network], ...(config.rpcUrl ? { endpoint: config.rpcUrl } : {}) })
 }
 
-export function createGenLayerWriteClient(config: GenLayerConfig, account: RegistryAddress, provider: WalletProvider) {
+export async function createGenLayerWriteClient(config: GenLayerConfig, account: RegistryAddress, provider: WalletProvider) {
+  const createClient = await loadCreateClient()
   return createClient({
     chain: NETWORKS[config.network],
     account,
@@ -123,11 +132,25 @@ export async function readAuthoritativeAudit(
   policy: string,
   txHash: TransactionHash,
 ): Promise<OnChainReadback> {
+  const readback = await readLatestAuthoritativeAudit(client, config, sourceHash, sourceUrl, policy, txHash)
+  if (!readback) throw new Error('The finalized transaction did not create a source-matched registry audit.')
+  return readback
+}
+
+export async function readLatestAuthoritativeAudit(
+  client: GenLayerClient<(typeof NETWORKS)[SupportedNetwork]>,
+  config: GenLayerConfig,
+  sourceHash: string,
+  sourceUrl: string,
+  policy: string,
+  txHash: TransactionHash | null = null,
+): Promise<OnChainReadback | null> {
   const latest = await client.readContract({
     address: config.registryAddress,
     functionName: 'get_latest',
-    args: [sourceHash, policy],
+    args: [sourceUrl, sourceHash, policy],
   })
+  if (latest === '') return null
   if (typeof latest !== 'string' || !/^(0|[1-9][0-9]*)$/.test(latest)) {
     throw new Error('The registry did not return a canonical audit ID for this source revision.')
   }
@@ -148,7 +171,7 @@ export async function readAuthoritativeAudit(
     || report.source.url !== sourceUrl
     || report.policy !== policy
   ) {
-    throw new Error('Authoritative readback does not match the submitted source identity and policy.')
+    throw new Error('Authoritative readback does not match the requested source identity and policy.')
   }
   return { audit, report, transactionHash: txHash }
 }

@@ -4,8 +4,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
-    // GenLayerJS is isolated behind the post-analysis lazy boundary. Its
-    // optional wallet chunk is ~547 kB minified / ~118 kB gzip.
+    // GenLayerJS is loaded only when the registry boundary performs a live
+    // read or write. Its optional wallet chunk is intentionally separate.
     chunkSizeWarningLimit: 600,
   },
   server: {

@@ -98,6 +98,10 @@ def _parameter_dependency(dependencies: tuple[str, ...]) -> bool:
     return any(item.startswith("parameter:") for item in dependencies)
 
 
+def _caller_dependency(dependencies: tuple[str, ...]) -> bool:
+    return bool({"sender", "message.value"} & set(dependencies)) or _parameter_dependency(dependencies)
+
+
 def evaluate_value(index: AstIndex) -> RuleResult:
     failures: list[Evidence] = []
     for path in CallPathAnalyzer(index).transfer_paths():
@@ -110,8 +114,11 @@ def evaluate_value(index: AstIndex) -> RuleResult:
             reasons.append("transfer amount depends on caller input")
         if "nondeterministic" in amount_deps or "consensus-result" in amount_deps:
             reasons.append("transfer amount depends directly on nondeterministic output")
-        if _parameter_dependency(transfer.recipient_dependencies) and not path.guarded:
+        recipient_deps = set(transfer.recipient_dependencies)
+        if _caller_dependency(transfer.recipient_dependencies) and not path.guarded:
             reasons.append("unguarded transfer recipient depends on caller input")
+        if recipient_deps & {"nondeterministic", "consensus-result", "model-output"}:
+            reasons.append("transfer recipient depends directly on nondeterministic output")
         if reasons:
             failures.append(
                 Evidence(
