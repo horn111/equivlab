@@ -12,7 +12,7 @@ from .report import analyze_source, dumps_report
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Analyze a source-pinned GenLayer contract against the EquivLab Phase 1 baseline."
+        description="Analyze a source-pinned GenLayer contract against the EquivLab consensus-safety baseline."
     )
     parser.add_argument("source", type=Path, help="Python Intelligent Contract source file")
     parser.add_argument("--url", required=True, help="Commit-pinned public source URL")

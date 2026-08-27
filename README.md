@@ -1,4 +1,4 @@
-# EquivLab deterministic analyzer
+# EquivLab
 
 EquivLab is a deterministic Python source analyzer for the twelve rules in the
 `gl-consensus-baseline-1` policy. It combines AST facts with bounded call-path
@@ -30,19 +30,24 @@ readback are recorded in
 result applies only to the pinned source revision and implemented policy. It is
 not formal verification or a security guarantee.
 
-Phase 3 contract behavior, test layers, and the verified GenVM v0.2.16 direct-mode
-boundary are recorded in [`docs/phase3-verification.md`](docs/phase3-verification.md).
+Contract behavior, test layers, and the verified GenVM v0.2.16 direct-mode
+boundary are recorded in [`docs/contract-verification.md`](docs/contract-verification.md).
 
 ## Web workbench and registry boundary
 
 The React + Vite + TypeScript workbench lives in [`web`](web). Its Vercel
 Function boundary calls the same deterministic Python analyzer used by the CLI.
-Local findings are available without a wallet. The Phase 5 boundary uses
+Local findings are available without a wallet. The registry boundary uses
 `genlayer-js` for wallet authorization, `request_audit`, receipt reconciliation,
 authoritative registry readback, challenges, and superseding revisions. The
 production configuration points to the Bradbury registry above; a fresh visitor
 can retrieve an existing source-matched audit without connecting a wallet. The UI
 does not simulate transactions or on-chain evidence.
+
+Wallet writes use an injected EIP-1193 provider. MetaMask and Rabby desktop
+extensions are supported; EquivLab adds or switches the wallet to Bradbury before
+each write. Embedded browsers and mobile browsers without an injected provider
+can still run local analysis and read registry records, but cannot sign a request.
 
 Run the local analyzer API and Vite app in separate terminals:
 
@@ -72,7 +77,7 @@ Deploy the `equivlab` directory as the Vercel project root. [`vercel.json`](verc
 builds `web` and packages the Python analyzer with `api/analyze.py`.
 
 The exact GitHub, GenLayer Bradbury, and Vercel release procedure is in
-[`docs/deployment-and-submission.md`](docs/deployment-and-submission.md). Keep
+[`docs/deployment.md`](docs/deployment.md). Keep
 the evidence ledger in [`docs/verification-evidence.md`](docs/verification-evidence.md)
 honest: deployment fields remain `PENDING` until an explorer or live URL proves
 them.

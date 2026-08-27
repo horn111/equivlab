@@ -1,4 +1,4 @@
-"""EquivLab deterministic Phase 1 analyzer."""
+"""EquivLab deterministic consensus-safety analyzer."""
 
 from .report import analyze_source, dumps_report
 

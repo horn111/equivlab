@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GenLayerTransaction, TransactionHash } from 'genlayer-js/types'
 import {
+  ensureWalletNetwork,
   isSuccessfulExecution,
   isUndeterminedReceipt,
   readAuthoritativeAudit,
   readLatestRegistryAudit,
   resolveGenLayerConfig,
   transactionExplorerUrl,
+  walletErrorMessage,
 } from './genlayer'
 
 const ADDRESS = `0x${'1'.repeat(40)}` as const
@@ -36,6 +38,54 @@ describe('GenLayer deployment configuration', () => {
       explorerBaseUrl: 'https://explorer-bradbury.genlayer.com',
     })
     expect(transactionExplorerUrl(resolution.config!, TX_HASH)).toBe(`https://explorer-bradbury.genlayer.com/tx/${TX_HASH}`)
+  })
+})
+
+describe('EIP-1193 wallet connection', () => {
+  const config = resolveGenLayerConfig({
+    VITE_NETWORK_NAME: 'testnetBradbury',
+    VITE_REGISTRY_ADDRESS: ADDRESS,
+  } as ImportMetaEnv).config!
+
+  it('keeps a wallet that is already on Bradbury unchanged', async () => {
+    const request = vi.fn().mockResolvedValue('0x107d')
+    await ensureWalletNetwork(config, { request })
+    expect(request).toHaveBeenCalledOnce()
+    expect(request).toHaveBeenCalledWith({ method: 'eth_chainId' })
+  })
+
+  it('switches an existing Bradbury network without using MetaMask Snap methods', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce('0x1')
+      .mockResolvedValueOnce(null)
+    await ensureWalletNetwork(config, { request })
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: '0x107d' }],
+    })
+    expect(request.mock.calls.flatMap((call) => call).join(' ')).not.toContain('wallet_getSnaps')
+  })
+
+  it('adds Bradbury when the wallet does not know the chain', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce('0x1')
+      .mockRejectedValueOnce({ code: 4902, message: 'Unknown chain' })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('0x107d')
+    await ensureWalletNetwork(config, { request })
+    expect(request).toHaveBeenNthCalledWith(3, {
+      method: 'wallet_addEthereumChain',
+      params: [expect.objectContaining({
+        chainId: '0x107d',
+        rpcUrls: ['https://rpc-bradbury.genlayer.com'],
+      })],
+    })
+  })
+
+  it('turns provider error objects into actionable copy', () => {
+    expect(walletErrorMessage({ code: 4001 })).toBe('The wallet request was rejected.')
+    expect(walletErrorMessage({ code: -32002 })).toMatch(/already pending/i)
+    expect(walletErrorMessage({ message: 'Rabby transport failed' })).toBe('Rabby transport failed')
   })
 })
 

@@ -68,7 +68,7 @@ describe('source identity helpers', () => {
   })
 })
 
-describe('Phase 4 workbench', () => {
+describe('EquivLab workbench', () => {
   it('shows rail selection feedback in the visible rule spectrum before analysis', async () => {
     const user = userEvent.setup()
     render(<App />)

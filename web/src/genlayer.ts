@@ -27,6 +27,12 @@ export interface ConfigResolution {
   error: string | null
 }
 
+interface ProviderErrorLike {
+  code?: unknown
+  message?: unknown
+  shortMessage?: unknown
+}
+
 let createClientPromise: Promise<CreateClient> | null = null
 
 function loadCreateClient(): Promise<CreateClient> {
@@ -84,6 +90,69 @@ export async function createGenLayerWriteClient(config: GenLayerConfig, account:
     provider,
     ...(config.rpcUrl ? { endpoint: config.rpcUrl } : {}),
   })
+}
+
+function providerErrorCode(error: unknown): number | null {
+  if (!error || typeof error !== 'object') return null
+  const code = (error as ProviderErrorLike).code
+  if (typeof code === 'number') return code
+  if (typeof code === 'string' && /^-?[0-9]+$/.test(code)) return Number(code)
+  return null
+}
+
+export function walletErrorMessage(error: unknown, fallback = 'Wallet request failed.'): string {
+  const code = providerErrorCode(error)
+  if (code === 4001) return 'The wallet request was rejected.'
+  if (code === 4100) return 'The wallet has not authorized this site. Reconnect it and try again.'
+  if (code === -32002) return 'A wallet request is already pending. Open the wallet extension to continue.'
+  if (code === -32601) return 'The wallet does not support a required EIP-1193 method.'
+  if (error && typeof error === 'object') {
+    const candidate = error as ProviderErrorLike
+    if (typeof candidate.shortMessage === 'string' && candidate.shortMessage.trim()) return candidate.shortMessage.trim()
+    if (typeof candidate.message === 'string' && candidate.message.trim()) return candidate.message.trim()
+  }
+  if (typeof error === 'string' && error.trim()) return error.trim()
+  return fallback
+}
+
+function isUnknownChainError(error: unknown): boolean {
+  if (providerErrorCode(error) === 4902) return true
+  const message = walletErrorMessage(error, '').toLowerCase()
+  return message.includes('unrecognized chain') || message.includes('unknown chain') || message.includes('not added')
+}
+
+export async function ensureWalletNetwork(config: GenLayerConfig, provider: WalletProvider): Promise<void> {
+  const chain = NETWORKS[config.network]
+  const chainId = `0x${chain.id.toString(16)}`
+  const currentChainId = await provider.request({ method: 'eth_chainId' })
+  if (typeof currentChainId === 'string' && currentChainId.toLowerCase() === chainId) return
+
+  try {
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] })
+    return
+  } catch (error) {
+    if (!isUnknownChainError(error)) throw error
+  }
+
+  const rpcUrls = config.rpcUrl ? [config.rpcUrl] : [...chain.rpcUrls.default.http]
+  const blockExplorerUrls = config.explorerBaseUrl
+    ? [config.explorerBaseUrl]
+    : chain.blockExplorers?.default.url ? [chain.blockExplorers.default.url] : undefined
+  await provider.request({
+    method: 'wallet_addEthereumChain',
+    params: [{
+      chainId,
+      chainName: chain.name,
+      nativeCurrency: chain.nativeCurrency,
+      rpcUrls,
+      ...(blockExplorerUrls ? { blockExplorerUrls } : {}),
+    }],
+  })
+
+  const addedChainId = await provider.request({ method: 'eth_chainId' })
+  if (typeof addedChainId !== 'string' || addedChainId.toLowerCase() !== chainId) {
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId }] })
+  }
 }
 
 function parseJsonObject(value: unknown, label: string): Record<string, unknown> {

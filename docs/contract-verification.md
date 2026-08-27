@@ -1,4 +1,4 @@
-# Phase 3 verification status
+# Contract verification status
 
 ## Implemented contract behavior
 
@@ -64,6 +64,6 @@ guarantee.
 
 ## Self-audit
 
-The Phase 2 analyzer reports `MEETS_BASELINE` for the registry source against all
+The analyzer reports `MEETS_BASELINE` for the registry source against all
 twelve deterministic cores. This is a regression signal only and does not replace
 direct-mode execution or manual review.

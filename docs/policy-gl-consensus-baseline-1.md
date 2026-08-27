@@ -2,7 +2,7 @@
 
 This policy evaluates inspectable source patterns in one canonical, source-pinned
 Python Intelligent Contract revision. A `MEETS_BASELINE` result is neither formal
-verification nor a security guarantee. Phase 2 runs no semantic model and does
+verification nor a security guarantee. The analyzer runs no semantic model and does
 not claim that a detected syntactic guard enforces the intended business rule.
 
 ## Deterministic rules

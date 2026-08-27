@@ -12,7 +12,7 @@ const SOURCE_HASH = '4'.repeat(64)
 const SOURCE_URL = `https://raw.githubusercontent.com/equivlab/demo/${'5'.repeat(40)}/fixtures/backdoored_tip_jar/contract.py`
 
 const mocks = vi.hoisted(() => ({
-  connect: vi.fn(),
+  ensureWalletNetwork: vi.fn(),
   writeContract: vi.fn(),
   waitForTransactionReceipt: vi.fn(),
   readAuthoritativeAudit: vi.fn(),
@@ -21,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./genlayer', () => ({
   createGenLayerReadClient: () => ({ waitForTransactionReceipt: mocks.waitForTransactionReceipt }),
-  createGenLayerWriteClient: () => ({ connect: mocks.connect, writeContract: mocks.writeContract }),
+  createGenLayerWriteClient: () => ({ writeContract: mocks.writeContract }),
+  ensureWalletNetwork: mocks.ensureWalletNetwork,
   isSuccessfulExecution: (receipt: { txExecutionResultName?: string }) => receipt.txExecutionResultName === 'FINISHED_WITH_RETURN',
   isUndeterminedReceipt: (receipt: { statusName?: string }) => receipt.statusName === 'UNDETERMINED',
   readAuthoritativeAudit: mocks.readAuthoritativeAudit,
@@ -35,6 +36,9 @@ vi.mock('./genlayer', () => ({
     error: null,
   }),
   transactionExplorerUrl: (_config: unknown, hash: string) => `https://explorer-bradbury.genlayer.com/tx/${hash}`,
+  walletErrorMessage: (error: unknown, fallback: string) => error && typeof error === 'object' && 'message' in error
+    ? String(error.message)
+    : fallback,
 }))
 
 const report: AuditReport = {
@@ -89,6 +93,10 @@ describe('attestation lifecycle', () => {
 
     render(<AttestationBoundary report={report} sourceMode="retrieved" />)
     await user.click(screen.getByRole('button', { name: /connect wallet/i }))
+    expect(mocks.ensureWalletNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ network: 'testnetBradbury' }),
+      window.ethereum,
+    )
     await user.click(await screen.findByRole('button', { name: /request attestation/i }))
 
     expect(await screen.findByRole('region', { name: /authoritative registry readback/i })).toBeInTheDocument()

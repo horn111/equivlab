@@ -9,12 +9,14 @@ import type { TransactionHash, TransactionStatus } from 'genlayer-js/types'
 import {
   createGenLayerReadClient,
   createGenLayerWriteClient,
+  ensureWalletNetwork,
   isSuccessfulExecution,
   isUndeterminedReceipt,
   readAuthoritativeAudit,
   readLatestRegistryAudit,
   resolveGenLayerConfig,
   transactionExplorerUrl,
+  walletErrorMessage,
   type RegistryAddress,
 } from './genlayer'
 import ExactValue from './ExactValue'
@@ -164,7 +166,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
   const connectWallet = useCallback(async () => {
     if (!config) return
     if (!window.ethereum) {
-      setError('No injected EVM wallet was found. Install a wallet that supports the GenLayer Snap.')
+      setError('No injected EVM wallet was found. Open EquivLab in a desktop browser with MetaMask or Rabby enabled.')
       setStage('error')
       return
     }
@@ -176,13 +178,12 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         throw new Error('The wallet returned no canonical account address.')
       }
       const nextAccount = accounts[0] as RegistryAddress
-      const client = await createGenLayerWriteClient(config, nextAccount, window.ethereum)
-      await client.connect(config.network)
+      await ensureWalletNetwork(config, window.ethereum)
       setAccount(nextAccount)
       setStage('ready')
       setAnnouncement(`Wallet ${nextAccount} connected.`)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Wallet connection failed.')
+      setError(walletErrorMessage(caught, 'Wallet connection failed.'))
       setStage('error')
     }
   }, [config])
@@ -261,6 +262,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     setReadback(null)
     setStage('signing')
     try {
+      await ensureWalletNetwork(config, window.ethereum)
       const client = await createGenLayerWriteClient(config, account, window.ethereum)
       const supersededAuditId = supersedesId.trim()
       const submitted = await client.writeContract({
@@ -289,7 +291,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       setAnnouncement(`Attestation transaction ${hash} submitted.`)
       await reconcile(hash)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Attestation transaction was not submitted.')
+      setError(walletErrorMessage(caught, 'Attestation transaction was not submitted.'))
       setStage('error')
     }
   }, [account, config, reconcile, report, sourceMode, supersedesId])
@@ -304,6 +306,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     setError(null)
     setChallengeBusy(true)
     try {
+      await ensureWalletNetwork(config, window.ethereum)
       const writeClient = await createGenLayerWriteClient(config, account, window.ethereum)
       const submitted = await writeClient.writeContract({
         address: config.registryAddress,
@@ -339,7 +342,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       setChallengeReasonHash('')
       setAnnouncement(`Challenge finalized for audit ${updated.audit.id}.`)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Challenge transaction failed.')
+      setError(walletErrorMessage(caught, 'Challenge transaction failed.'))
     } finally {
       setChallengeBusy(false)
     }
