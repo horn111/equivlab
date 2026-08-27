@@ -26,7 +26,7 @@ a security guarantee.
 | GitHub repository | <https://github.com/horn111/equivlab> |
 | Published reference-fixture commit | `aef703943cef6a6d9c3f65545072711d78d44417` |
 | Registry web-fetch fix commit | `6af02a2653591810b4f3dce4e7d4c118f651c239` |
-| Release/deployment commit (40 characters) | `9affe3b7515cb2e31b157e6ffddf8b82a71c5e9d` |
+| Web runtime/packaging commit | `66345fdefe96c7be7f63953021581b7eecdfe22d` |
 | License selected by repository owner | [MIT](../LICENSE) |
 | Vercel production URL | <https://equivlab.vercel.app> |
 | GenLayer network | `testnetBradbury` |
