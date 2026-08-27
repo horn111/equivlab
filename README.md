@@ -14,6 +14,20 @@ in [`docs/policy-gl-consensus-baseline-1.md`](docs/policy-gl-consensus-baseline-
 The fixture corpus contains a full `pass.py`/`fail.py` pair for every rule; each
 negative fixture isolates one rule in the complete report.
 
+## Live deployment
+
+- Workbench: <https://equivlab.vercel.app>
+- Network: GenLayer Bradbury (`testnetBradbury`)
+- Registry: `0x45a08F1516b2b54603bfAE87780e7F6f38d31F20`
+- Live acceptance audit: permissionless tip jar, `FAIL` on `AUTH-01` and
+  `VALUE-01`
+
+Transaction hashes, the canonical source hash, and authoritative report
+readback are recorded in
+[`docs/verification-evidence.md`](docs/verification-evidence.md). The live
+result applies only to the pinned source revision and implemented policy. It is
+not formal verification or a security guarantee.
+
 Phase 3 contract behavior, test layers, and the verified GenVM v0.2.16 direct-mode
 boundary are recorded in [`docs/phase3-verification.md`](docs/phase3-verification.md).
 
