@@ -132,12 +132,12 @@ export async function readAuthoritativeAudit(
   policy: string,
   txHash: TransactionHash,
 ): Promise<OnChainReadback> {
-  const readback = await readLatestAuthoritativeAudit(client, config, sourceHash, sourceUrl, policy, txHash)
+  const readback = await readLatestRegistryAudit(client, config, sourceHash, sourceUrl, policy, txHash)
   if (!readback) throw new Error('The finalized transaction did not create a source-matched registry audit.')
   return readback
 }
 
-export async function readLatestAuthoritativeAudit(
+export async function readLatestRegistryAudit(
   client: GenLayerClient<(typeof NETWORKS)[SupportedNetwork]>,
   config: GenLayerConfig,
   sourceHash: string,

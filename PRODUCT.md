@@ -38,7 +38,7 @@ The UI must distinguish local deterministic analysis from the on-chain validator
 - Source input must resolve to a commit-pinned raw GitHub HTTPS URL and canonical SHA-256.
 - Audit history is immutable. A fixed revision supersedes an earlier audit without erasing it.
 - The web workbench provides local preflight, real transaction lifecycle, retry and reconciliation, authoritative readback, revision comparison, and shareable local reports.
-- Network and registry address are deployment configuration. The `genlayer-js` wallet and transaction path is implemented; live transaction evidence remains pending until a registry is deployed. Missing configuration must remain explicit rather than fabricated.
+- Network and registry address are deployment configuration. Production uses Bradbury registry `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599`; missing or invalid configuration must remain explicit rather than fabricated.
 
 ## Brand Commitments
 
@@ -50,9 +50,11 @@ The product name is EquivLab. Language must be precise, technical, adversarial, 
 - Production contract: `contracts/consensus_safety_registry.py`
 - Reference fixtures: `fixtures/backdoored_tip_jar`, `fixtures/schema_only_fact_checker`, and `fixtures/hardened_fact_checker`
 - Analyzer and contract test suites: `tests/analyzer`, `tests/contract`, and `tests/direct`
-- Verified Phase 3 result: 64 tests passed, including 7 GenVM v0.2.16 direct-mode tests
+- Verified release result: 117 dependency-free Python tests and 7 GenVM v0.2.16 direct-mode tests passed
 - Phase 5 frontend integration: `genlayer-js` wallet authorization, registry writes, receipt reconciliation, authoritative readback, challenge, and supersession flows
-- No deployed contract address, explorer transaction, customer logo, testimonial, or usage metric exists yet. Future surfaces must not invent them.
+- Production URL: `https://equivlab.vercel.app`
+- Bradbury live matrix: audit `0` `MEETS_BASELINE`; audits `1` and `2` `FAIL`; audit `3` `UNVERIFIABLE`
+- No customer logo, testimonial, certification, or usage metric exists. Future surfaces must not invent them.
 
 ## Product Principles
 

@@ -18,9 +18,11 @@ negative fixture isolates one rule in the complete report.
 
 - Workbench: <https://equivlab.vercel.app>
 - Network: GenLayer Bradbury (`testnetBradbury`)
-- Registry: `0x45a08F1516b2b54603bfAE87780e7F6f38d31F20`
-- Live acceptance audit: permissionless tip jar, `FAIL` on `AUTH-01` and
-  `VALUE-01`
+- Registry: `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599`
+- Pinned fixture commit: `ce007240d1cbb1b7a789348b566cb50cea9b80e7`
+- Live matrix: hardened fact checker `MEETS_BASELINE`; permissionless tip jar
+  `FAIL` on `AUTH-01` and `VALUE-01`; schema-only validator `FAIL` on `CONS-01`
+  and `EVID-01`; deliberate hash mismatch `UNVERIFIABLE` for all twelve rules.
 
 Transaction hashes, the canonical source hash, and authoritative report
 readback are recorded in
@@ -37,9 +39,10 @@ The React + Vite + TypeScript workbench lives in [`web`](web). Its Vercel
 Function boundary calls the same deterministic Python analyzer used by the CLI.
 Local findings are available without a wallet. The Phase 5 boundary uses
 `genlayer-js` for wallet authorization, `request_audit`, receipt reconciliation,
-authoritative registry readback, challenges, and superseding revisions. It stays
-explicitly unavailable until a supported network and deployed registry address
-are configured; the UI does not simulate transactions or on-chain evidence.
+authoritative registry readback, challenges, and superseding revisions. The
+production configuration points to the Bradbury registry above; a fresh visitor
+can retrieve an existing source-matched audit without connecting a wallet. The UI
+does not simulate transactions or on-chain evidence.
 
 Run the local analyzer API and Vite app in separate terminals:
 

@@ -1397,6 +1397,7 @@ textarea {
 
 .readback-heading { display: flex; flex-direction: column; gap: 8px; }
 .readback-heading strong { font-family: var(--display); font-size: 28px; font-weight: 500; letter-spacing: 0.04em; }
+.readback-heading small { max-width: 24ch; color: var(--ink-muted); font-family: var(--mono); font-size: 10px; line-height: 1.45; letter-spacing: 0.08em; }
 .authoritative-readback dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0; }
 .authoritative-readback dl div { min-width: 0; padding: 0 14px; border-left: 1px solid var(--line); }
 .authoritative-readback dl div:first-child { padding-left: 0; border-left: 0; }

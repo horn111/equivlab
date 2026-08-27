@@ -63,6 +63,19 @@ The RPC and explorer values may be omitted to use the values shipped by the
 installed `genlayer-js` chain definition. Keeping them explicit makes the release
 configuration reviewable.
 
+Production release on 2026-08-27:
+
+```text
+VITE_NETWORK_NAME=testnetBradbury
+VITE_REGISTRY_ADDRESS=0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599
+VITE_DEMO_REPOSITORY=horn111/equivlab
+VITE_DEMO_COMMIT=ce007240d1cbb1b7a789348b566cb50cea9b80e7
+```
+
+The production alias is <https://equivlab.vercel.app>. Vercel WAF applies a
+fixed-window rate limit of 24 requests per 60 seconds per IP to `/api/analyze`;
+the Python function also enforces its own bounded per-client limiter.
+
 ## 4. Produce live evidence
 
 On the production URL:
@@ -71,9 +84,10 @@ On the production URL:
 2. Analyze the permissionless tip jar and confirm `FAIL` for `AUTH-01` and `VALUE-01`.
 3. Analyze the schema-only validator and confirm `FAIL` for `CONS-01` and `EVID-01`.
 4. Analyze the hardened fixture and confirm `MEETS_BASELINE`.
-5. Connect the wallet, request one audit, and wait for an accepted or finalized successful receipt.
-6. Reload the page and confirm authoritative readback reproduces the same source URL, source hash, policy, and report.
-7. Record the live URL, commit, contract address, deployment transaction, audit transaction, and explorer links in `docs/verification-evidence.md`.
+5. Submit the deliberate mismatch and confirm `UNVERIFIABLE` for all twelve rules because source identity was not established.
+6. Connect the wallet, request one audit, and wait for a finalized successful receipt before calling the readback authoritative.
+7. Reload the page and confirm the existing registry record reproduces the same source URL, source hash, policy, and report. Without the originating receipt, treat this as registry-observed rather than independently finalized.
+8. Record the live URL, commit, contract address, deployment transaction, audit transaction, and explorer links in `docs/verification-evidence.md`.
 
 A browser-local report or a submitted preview is not on-chain evidence.
 
@@ -91,5 +105,6 @@ consensus is essential, and the calibrated result boundary:
 > exposes authoritative readback, challenge, and supersession history. `MEETS_BASELINE`
 > is not formal verification or a security guarantee.
 
-Do not submit until the evidence ledger has no `PENDING` entries in the required
-deployment rows.
+The 2026-08-27 release has no `PENDING` entries in the required deployment or
+fixture rows. Use [`verification-evidence.md`](verification-evidence.md) as the
+source of truth when filling the contribution form.

@@ -4,7 +4,7 @@ import {
   isSuccessfulExecution,
   isUndeterminedReceipt,
   readAuthoritativeAudit,
-  readLatestAuthoritativeAudit,
+  readLatestRegistryAudit,
   resolveGenLayerConfig,
   transactionExplorerUrl,
 } from './genlayer'
@@ -98,7 +98,7 @@ describe('authoritative readback', () => {
   it('returns an explicit empty result when no exact source identity is registered', async () => {
     const readContract = vi.fn().mockResolvedValue('')
     const config = resolveGenLayerConfig({ VITE_NETWORK_NAME: 'testnetBradbury', VITE_REGISTRY_ADDRESS: ADDRESS } as ImportMetaEnv).config!
-    await expect(readLatestAuthoritativeAudit(
+    await expect(readLatestRegistryAudit(
       { readContract } as never,
       config,
       SOURCE_HASH,

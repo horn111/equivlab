@@ -12,7 +12,7 @@ import {
   isSuccessfulExecution,
   isUndeterminedReceipt,
   readAuthoritativeAudit,
-  readLatestAuthoritativeAudit,
+  readLatestRegistryAudit,
   resolveGenLayerConfig,
   transactionExplorerUrl,
   type RegistryAddress,
@@ -90,6 +90,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
   const [error, setError] = useState<string | null>(resolution.error)
   const [transactionHash, setTransactionHash] = useState<TransactionHash | null>(null)
   const [readback, setReadback] = useState<OnChainReadback | null>(null)
+  const [readbackAuthority, setReadbackAuthority] = useState<'registry-observed' | 'finalized' | null>(null)
   const [existingLookup, setExistingLookup] = useState<'idle' | 'checking' | 'none' | 'found' | 'error'>('idle')
   const [lookupError, setLookupError] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
@@ -105,7 +106,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     setAnnouncement('Checking the registry for an existing audit of this exact source identity.')
     try {
       const client = await createGenLayerReadClient(config)
-      const existing = await readLatestAuthoritativeAudit(
+      const existing = await readLatestRegistryAudit(
         client,
         config,
         report.source.canonical_sha256,
@@ -114,11 +115,13 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       )
       if (existing) {
         setReadback(existing)
+        setReadbackAuthority('registry-observed')
         setExistingLookup('found')
         setStage('complete')
-        setAnnouncement(`Existing authoritative audit ${existing.audit.id} loaded. Result: ${existing.report.status}.`)
+        setAnnouncement(`Existing registry audit ${existing.audit.id} loaded. Finalization was not independently checked. Result: ${existing.report.status}.`)
       } else {
         setReadback(null)
+        setReadbackAuthority(null)
         setExistingLookup('none')
         setStage('idle')
         setAnnouncement('No existing audit was found for this exact source identity and policy.')
@@ -126,6 +129,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Registry lookup failed.'
       setReadback(null)
+      setReadbackAuthority(null)
       setExistingLookup('error')
       setLookupError(message)
       setStage('idle')
@@ -136,6 +140,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
   useEffect(() => {
     setTransactionHash(null)
     setReadback(null)
+    setReadbackAuthority(null)
     setExistingLookup('idle')
     setLookupError(null)
     if (!config || sourceMode !== 'retrieved') return
@@ -186,6 +191,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     if (!config) return
     setError(null)
     setReadback(null)
+    setReadbackAuthority(null)
     setTransactionHash(hash)
     try {
       const client = await createGenLayerReadClient(config)
@@ -229,6 +235,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
         hash,
       )
       setReadback(authoritative)
+      setReadbackAuthority('finalized')
       setExistingLookup('found')
       localStorage.removeItem(PENDING_KEY)
       setStage('complete')
@@ -319,7 +326,7 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       if (!isSuccessfulExecution(receipt)) {
         throw new Error(`Challenge execution did not return successfully (${receipt.txExecutionResultName ?? 'execution result unavailable'}).`)
       }
-      const updated = await readLatestAuthoritativeAudit(
+      const updated = await readLatestRegistryAudit(
         readClient,
         config,
         report.source.canonical_sha256,
@@ -347,7 +354,9 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
     : existingLookup === 'none'
       ? 'No existing audit for this exact source identity and policy.'
       : existingLookup === 'found'
-        ? STAGE_COPY.complete
+        ? readbackAuthority === 'finalized'
+          ? STAGE_COPY.complete
+          : 'Registry record matches the exact source identity. Finalization was not independently checked.'
         : existingLookup === 'error'
           ? 'Registry lookup failed. No absence claim is made.'
           : config ? STAGE_COPY[stage] : 'SEPARATE AUTHORITY · NO ON-CHAIN RECORD'
@@ -423,10 +432,14 @@ export default function AttestationBoundary({ report, sourceMode }: Props) {
       )}
 
       {readback && (
-        <section className="authoritative-readback" aria-label="Authoritative registry readback">
+        <section
+          className="authoritative-readback"
+          aria-label={readbackAuthority === 'finalized' ? 'Finalized authoritative registry readback' : 'Existing registry readback'}
+        >
           <div className="readback-heading">
-            <span>AUTHORITATIVE READBACK</span>
+            <span>{readbackAuthority === 'finalized' ? 'FINALIZED AUTHORITATIVE READBACK' : 'EXISTING REGISTRY READBACK'}</span>
             <strong className={`status-${readback.report.status.toLowerCase()}`}>{readback.report.status}</strong>
+            {readbackAuthority !== 'finalized' && <small>FINALIZATION NOT INDEPENDENTLY CHECKED</small>}
           </div>
           <dl>
             <div><dt>AUDIT ID</dt><dd>{readback.audit.id}</dd></div>
