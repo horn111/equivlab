@@ -26,7 +26,7 @@ security guarantee.
 | GitHub repository | <https://github.com/horn111/equivlab> |
 | Pinned fixture revision | `ce007240d1cbb1b7a789348b566cb50cea9b80e7` |
 | Vercel production URL | <https://equivlab.vercel.app> |
-| Vercel deployment | `dpl_FGBfdZ315QhgHAXfwatKBiBL7akM` (`READY`) |
+| Vercel deployment | `dpl_87hZHGydkZa5SWKZ2zGmDeAoHkqD` (`READY`) |
 | GenLayer network | `testnetBradbury` |
 | Production registry | `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599` |
 | Registry deployment transaction | `0x4d0523f6633f52ad3d4e7b2e9d39efc1aa3f80ce931f126c43fd9e49848a5616` (`ACCEPTED`, `FINISHED_WITH_RETURN`) |
