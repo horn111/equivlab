@@ -422,7 +422,8 @@ def _unverifiable(source_url: str, source_hash: str, rules: list[str]) -> dict[s
 
 def _audit_source(source_url: str, submitted_hash: str) -> dict[str, typing.Any]:
     try:
-        fetched = gl.nondet.web.render(source_url, mode="text")
+        response = gl.nondet.web.get(source_url)
+        fetched = response.body.decode("utf-8")
         source = _canonical_source(fetched)
     except Exception:
         return _unverifiable(source_url, submitted_hash, list(RULE_IDS))

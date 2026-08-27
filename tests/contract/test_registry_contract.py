@@ -41,13 +41,14 @@ class FakeRuntime:
         self.llm_values: list[object] = []
         self.validator_accepted: bool | None = None
 
-    def render(self, _url: str, **_kwargs):
+    def get(self, _url: str, **_kwargs):
         if not self.web_values:
             raise RuntimeError("missing web mock")
         value = self.web_values.pop(0)
         if isinstance(value, Exception):
             raise value
-        return value
+        body = value.encode("utf-8") if isinstance(value, str) else value
+        return types.SimpleNamespace(body=body)
 
     def exec_prompt(self, _prompt: str, **_kwargs):
         if not self.llm_values:
@@ -77,7 +78,7 @@ def load_contract_module():
         run_nondet_unsafe=runtime.run_nondet_unsafe,
     )
     nondet = types.SimpleNamespace(
-        web=types.SimpleNamespace(render=runtime.render),
+        web=types.SimpleNamespace(get=runtime.get),
         exec_prompt=runtime.exec_prompt,
     )
     gl = types.SimpleNamespace(
