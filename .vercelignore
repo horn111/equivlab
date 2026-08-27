@@ -5,6 +5,8 @@
 .pytest_cache
 .env
 .env.*
+!.env.example
+!web/.env.example
 artifacts
 build
 analyzer/equivlab.egg-info
