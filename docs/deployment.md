@@ -85,8 +85,9 @@ On the production URL:
 3. Analyze the schema-only validator and confirm `FAIL` for `CONS-01` and `EVID-01`.
 4. Analyze the hardened fixture and confirm `MEETS_BASELINE`.
 5. Submit the deliberate mismatch and confirm `UNVERIFIABLE` for all twelve rules because source identity was not established.
-6. Connect the wallet, request one audit, and wait for a finalized successful receipt before calling the readback authoritative.
-7. Reload the page and confirm the existing registry record reproduces the same source URL, source hash, policy, and report. Without the originating receipt, treat this as registry-observed rather than independently finalized.
-8. Record the live URL, commit, contract address, deployment transaction, audit transaction, and explorer links in `docs/verification-evidence.md`.
+6. Analyze a commit-pinned ordinary Python file with no `gl.Contract` class and confirm an explicit `UNVERIFIABLE` result rather than `MEETS_BASELINE`.
+7. Connect the wallet, request one audit, and wait for a finalized successful receipt before calling the readback authoritative.
+8. Reload the page and confirm the existing registry record reproduces the same source URL, source hash, policy, and report. Without the originating receipt, treat this as registry-observed rather than independently finalized.
+9. Record the live URL, commit, contract address, deployment transaction, audit transaction, and explorer links in `docs/verification-evidence.md`.
 
 A browser-local report or a submitted preview is not on-chain evidence.

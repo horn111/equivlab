@@ -21,9 +21,11 @@ public consensus-path eligibility before `MEETS_BASELINE`.
 - Network: GenLayer Bradbury (`testnetBradbury`)
 - Registry: `0xb3DC5368F543b910A44fE42714077c7B8b1B4237`
 - Pinned fixture commit: `ea9f1459da5f71f1f22e4e4fd41205431f97a6a6`
-- Active policy: `gl-consensus-baseline-2`. Its registry was deployed on
-  2026-09-02 and starts with a separate audit history; the earlier baseline-1
-  matrix remains documented as historical evidence.
+- Active policy: `gl-consensus-baseline-2`. The live matrix records the hardened
+  fact checker as `MEETS_BASELINE`, the permissionless tip jar as `FAIL` on
+  `AUTH-01` and `VALUE-01`, the schema-only validator as `FAIL` on `CONS-01`
+  and `EVID-01`, and a plain Python source as `UNVERIFIABLE`. The earlier
+  baseline-1 matrix remains documented as historical evidence.
 
 Transaction hashes, the canonical source hash, and authoritative report
 readback are recorded in

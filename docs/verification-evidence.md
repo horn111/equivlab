@@ -15,9 +15,9 @@ security guarantee.
 | npm dependency audit | `0 vulnerabilities` on 2026-08-27 | Published npm dependency advisories |
 | Impeccable static detector | `0 findings` on 2026-08-27 | `web/src` source scan |
 | Responsive browser pass | Passed at 1440×900, 1440×700, and 390×844 on 2026-08-27 | Fixture switching, local analysis, result focus, registry recovery states, 44px targets, and horizontal overflow |
-| Production browser E2E | Passed on 2026-08-27 | Pinned fetch → `/api/analyze` 200 → local `FAIL` → automatic source-matched audit `1` registry readback without wallet; UI states that finalization was not independently checked |
+| Production browser E2E | Passed on 2026-09-02 | Baseline-2 pinned fetch → `/api/analyze` 200 → local tip-jar `FAIL` → automatic source-matched audit `1` registry readback without wallet; hardened source returned `MEETS_BASELINE` |
 | Wallet connection browser test | Passed on 2026-08-27 | Simulated injected EIP-1193 provider → account authorization → Bradbury switch fallback → Bradbury network addition; no signature or transaction was simulated |
-| Production accessibility | `0` WCAG A/AA violations on 2026-08-27 | axe-core 4.12.1; contrast remained incomplete where pseudo-element backgrounds prevented automated calculation |
+| Production accessibility | `0` WCAG A/AA violations on 2026-09-02 | axe-core 4.12.1 after result-region semantics fix; contrast remained incomplete where pseudo-element backgrounds prevented automated calculation |
 | Production API observability | 200, `FAIL`, 2 ms application duration | Structured Vercel runtime log with request ID |
 
 ## Release identity
@@ -29,10 +29,32 @@ security guarantee.
 | Vercel production URL | <https://equivlab.vercel.app> |
 | GenLayer network | `testnetBradbury` |
 | Production registry | `0xb3DC5368F543b910A44fE42714077c7B8b1B4237` |
-| Registry deployment transaction | `0xd759bb518bc96369acdce3ea3c61bafe6905735868b7afe5ae7914b16f7ec33b` (`ACCEPTED`, `FINISHED_WITH_RETURN`; not yet independently finalized when recorded) |
-| Initial registry count | `0` by live read on 2026-09-02 |
+| Registry deployment transaction | `0xd759bb518bc96369acdce3ea3c61bafe6905735868b7afe5ae7914b16f7ec33b` (`FINALIZED`, `FINISHED_WITH_RETURN`) |
+| Registry count | `4` consensus-accepted baseline-2 audit records |
 | Historical baseline-1 registry | `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599` |
 | Edge abuse control | Published Vercel WAF rule: `/api/analyze`, 24 requests per 60 seconds per IP |
+
+## Live baseline-2 fixture matrix
+
+Every transaction below reached `ACCEPTED` and `FINISHED_WITH_RETURN`; the
+registry readback reproduced the exact source URL, canonical hash, policy, and
+report. Their `finalization_timestamp` values were still `0` when this ledger
+was updated, so the evidence is consensus-accepted rather than independently
+finalized.
+
+| Audit | Source | Consensus-accepted registry result | Transaction | Report SHA-256 |
+| --- | --- | --- | --- | --- |
+| `0` | Hardened fact checker | `MEETS_BASELINE` | `0xfd222ad1af6c73dfa391e9602fc37a55ea22cd2e7a28873d2424a8b04872d302` | `f6b8e8bdd265bf5bfdbfb25ee2e47ff6e45975ea7f34cde4d19df0c2f0f40bf8` |
+| `1` | Permissionless tip jar | `FAIL`: `AUTH-01`, `VALUE-01`; `CONS-01` is `UNVERIFIABLE` | `0x82bdebc3ede90b458aa45a9943e36b40e8a14b09817d100c5e5edba0dad62711` | `e73c02d40d4f923f141627d61945b1461f1fef31cc9e0fe987c5ae5841ee2e1d` |
+| `2` | Schema-only validator | `FAIL`: `CONS-01`, `EVID-01` | `0x1cccaa9b9f09eea70f66975b5db12a53c4ed02e6fef15a4d8629ffe1e9e10007` | `046afe942d2233ee9e10bb209787b65edaa65babddfb7301189e0d0b318a66cd` |
+| `3` | Plain Python non-contract | `UNVERIFIABLE`: eleven AST rules; `SRC-01` source identity established | `0x66a27589d5b488d1a551dbae1eb861d4dc88975fc9c67c7eda8b0da4e8fd36a9` | `6e8c45a027a5a53544ef797449c5f1da4bd672fce9662403cf8841778f4985c0` |
+
+Pinned baseline-2 canonical hashes:
+
+- hardened fact checker: `bc31552097a0c7c0a176faf884c528e997c52e759c26aa96095b792a276fdfc2`;
+- permissionless tip jar: `bd15033156ca35ca4610accd7c7276b6ebdf7e3e74e245dcf504266f39ca3a5d`;
+- schema-only validator: `d9d8f589765455bb30b56dba05ca8c7493d1656d30a26f6c23725ab675ef0e0a`;
+- plain Python non-contract: `9402645188f81481134b53a673c2fc5d2dde54d834fd4b3b5fbcfee2e74355ac`.
 
 ## Historical baseline-1 fixture matrix
 
