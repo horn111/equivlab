@@ -12,37 +12,61 @@ security guarantee.
 | GenLayer direct-mode suite | `8 passed` on 2026-09-02 | Official GenVM v0.2.16 runner with mocked web responses, including non-contract and missing-consensus outcomes |
 | Frontend unit/integration suite | `29 passed` on 2026-09-02 | Browser-local behavior, mixed `FAIL`/`UNVERIFIABLE` reports, SDK clients, EIP-1193 switching, and wallet/readback lifecycle |
 | Production frontend build | Passed on 2026-09-02 | TypeScript and Vite production compilation |
-| npm dependency audit | `0 vulnerabilities` on 2026-08-27 | Published npm dependency advisories |
+| npm dependency audit | `0 vulnerabilities` on 2026-09-02 | Published npm dependency advisories |
 | Impeccable static detector | `0 findings` on 2026-09-02 | Reviewer-facing `web/src` source and style scan |
 | Responsive browser pass | Passed at 1280×720 and 390×844 on 2026-09-02 | Default pinned retrieval, explicit preview mode, one-click non-contract outcome, visible rule-selection evidence, 44px targets, console errors, and horizontal overflow |
-| Production browser E2E | Passed on 2026-09-02 | Baseline-2 pinned fetch → `/api/analyze` 200 → local tip-jar `FAIL` → automatic source-matched audit `1` registry readback without wallet; hardened source returned `MEETS_BASELINE` |
+| Production browser E2E | Passed on 2026-09-02 | Baseline-3 pinned fetch → `/api/analyze` 200 → all four local outcomes → exact source-matched registry audits `0`–`3` without wallet; no console errors or framework overlay |
 | Wallet connection browser test | Passed on 2026-08-27 | Simulated injected EIP-1193 provider → account authorization → Bradbury switch fallback → Bradbury network addition; no signature or transaction was simulated |
 | Production accessibility | `0` WCAG A/AA violations on 2026-09-02 | axe-core 4.12.1 after result-region semantics fix; contrast remained incomplete where pseudo-element backgrounds prevented automated calculation |
-| Production API observability | 200, `FAIL`, 2 ms application duration | Structured Vercel runtime log with request ID |
+| Production API and registry readback | Passed on 2026-09-02 | Production reproduced the pinned baseline-3 commit, registry address, four report hashes, and expected outcome matrix |
 
 ## Baseline-3 release boundary
 
-The source tree implements `gl-consensus-baseline-3` and
-`equivlab-report-v2`. Local checks above are complete. A baseline-3 Bradbury
-registry address, deployment transaction, source-pinned audit matrix, and
-production promotion are not claimed until those external steps are completed
-and recorded below. Baseline-2 records remain immutable historical evidence.
+The source tree, production analyzer, and Bradbury registry use
+`gl-consensus-baseline-3` and `equivlab-report-v2`. The release identity below
+binds the deployed contract, analyzed fixture revision, production deployment,
+and four source-pinned audits. Baseline-1 and baseline-2 records remain
+immutable historical evidence.
 
 ## Release identity
 
 | Evidence | Value |
 | --- | --- |
 | GitHub repository | <https://github.com/horn111/equivlab> |
-| Pinned fixture revision | `ea9f1459da5f71f1f22e4e4fd41205431f97a6a6` |
+| Pinned fixture revision | `e60cae9cbc15a5f5c95fc27daac658f60c99ea99` |
 | Vercel production URL | <https://equivlab.vercel.app> |
+| Vercel deployment | `dpl_6ReHyHa3quJTju6paL2ey526azXV` (`READY`, production) |
 | GenLayer network | `testnetBradbury` |
-| Production registry | `0xb3DC5368F543b910A44fE42714077c7B8b1B4237` |
-| Registry deployment transaction | `0xd759bb518bc96369acdce3ea3c61bafe6905735868b7afe5ae7914b16f7ec33b` (`FINALIZED`, `FINISHED_WITH_RETURN`) |
-| Registry count | `4` consensus-accepted baseline-2 audit records |
+| Production registry | `0xab90cA3d5d8E9341c1681475e50343C423AA903f` |
+| Compact deployment source | `34,526` bytes; SHA-256 `31e0625280e4aad25a15ca74aa85bfc3b4ef00c18473a49e10443df27efad5aa`; finalized on-chain code readback matched both values |
+| Registry deployment transaction | [`0x085d…9d13`](https://explorer-bradbury.genlayer.com/tx/0x085d3b4252a669d80ff5cd957710d84fe8721e12ff57e5a41f0fae5ab4eb9d13) (`FINALIZED`, `FINISHED_WITH_RETURN`) |
+| Registry count | `4` finalized baseline-3 audit records |
 | Historical baseline-1 registry | `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599` |
 | Edge abuse control | Published Vercel WAF rule: `/api/analyze`, 24 requests per 60 seconds per IP |
 
-## Live baseline-2 fixture matrix
+## Live baseline-3 fixture matrix
+
+Every transaction below reached `FINALIZED` and `FINISHED_WITH_RETURN` with
+five validator votes `AGREE`. Registry readback reproduced the exact source
+URL, canonical hash, policy, and report. Finalization status was independently
+queried through Bradbury's `gen_getTransactionStatus` endpoint after each
+appeal window elapsed.
+
+| Audit | Source | Finalized registry result | Transaction | Report SHA-256 |
+| --- | --- | --- | --- | --- |
+| `0` | Hardened fact checker | `MEETS_BASELINE` | [`0x8e4b…ab3a`](https://explorer-bradbury.genlayer.com/tx/0x8e4b3d32346f2643c6200c9fc0278dff514fcc3baca8b9dd2d462c8a8235ab3a) | `af7d8f937361766286e55c17ea96709f37519ac4103d5edd42756c189f77af62` |
+| `1` | Permissionless tip jar | `FAIL`: `AUTH-01`, `VALUE-01`; `CONS-01` is `UNVERIFIABLE` | [`0x3cd5…6e86`](https://explorer-bradbury.genlayer.com/tx/0x3cd5946d6ce8f59e5dbc80a071c3d7c005d67231f73d1a0e97a644faaeb06e86) | `f5b36526e4081d3e7b62325376b1c289001b29266931930b717f0d9e2569891b` |
+| `2` | Schema-only validator | `FAIL`: `CONS-01`, `EVID-01` | [`0xfa89…28b9`](https://explorer-bradbury.genlayer.com/tx/0xfa89e9d952fb6ad62517569a31e04f5a32b8b70d8b7e0e0997566e1acce428b9) | `82f916d1db32716b84108ea5d922e92b3c3b6b1a8691c9d4a8bfcf5c42711420` |
+| `3` | Plain Python non-contract | `UNVERIFIABLE`: eleven AST rules; `SRC-01` source identity established | [`0x604d…21a9`](https://explorer-bradbury.genlayer.com/tx/0x604dc60c7fd8137031c6a1dcf1290a987391060fdb6bd34f8f7032e6a45221a9) | `6ecb226c40dec0f6e2ccc66a2bcb30e7376af64f822044e38a929a5d210053d7` |
+
+Pinned baseline-3 canonical hashes:
+
+- hardened fact checker: `bc31552097a0c7c0a176faf884c528e997c52e759c26aa96095b792a276fdfc2`;
+- permissionless tip jar: `bd15033156ca35ca4610accd7c7276b6ebdf7e3e74e245dcf504266f39ca3a5d`;
+- schema-only validator: `d9d8f589765455bb30b56dba05ca8c7493d1656d30a26f6c23725ab675ef0e0a`;
+- plain Python non-contract: `9402645188f81481134b53a673c2fc5d2dde54d834fd4b3b5fbcfee2e74355ac`.
+
+## Historical baseline-2 fixture matrix
 
 Every transaction below reached `ACCEPTED` and `FINISHED_WITH_RETURN`; the
 registry readback reproduced the exact source URL, canonical hash, policy, and

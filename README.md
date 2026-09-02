@@ -22,17 +22,16 @@ public consensus-path eligibility before `MEETS_BASELINE`.
 
 - Workbench: <https://equivlab.vercel.app>
 - Network: GenLayer Bradbury (`testnetBradbury`)
-- Registry: `0xb3DC5368F543b910A44fE42714077c7B8b1B4237` (baseline-2 historical deployment)
-- Pinned fixture commit: `ea9f1459da5f71f1f22e4e4fd41205431f97a6a6`
-- Current public release policy: `gl-consensus-baseline-2`. The live matrix records the hardened
-  fact checker as `MEETS_BASELINE`, the permissionless tip jar as `FAIL` on
-  `AUTH-01` and `VALUE-01`, the schema-only validator as `FAIL` on `CONS-01`
-  and `EVID-01`, and a plain Python source as `UNVERIFIABLE`. The earlier
-  baseline-1 matrix remains documented as historical evidence. The source tree
-  implements baseline 3; production is not labelled baseline 3 until a separate
-  registry deployment and fresh source-pinned evidence are recorded.
+- Registry: `0xab90cA3d5d8E9341c1681475e50343C423AA903f`
+- Pinned fixture commit: `e60cae9cbc15a5f5c95fc27daac658f60c99ea99`
+- Current public release policy: `gl-consensus-baseline-3`. The finalized live
+  matrix records the hardened fact checker as `MEETS_BASELINE`, the
+  permissionless tip jar as `FAIL` on `AUTH-01` and `VALUE-01`, the schema-only
+  validator as `FAIL` on `CONS-01` and `EVID-01`, and an ordinary Python file as
+  a non-contract `UNVERIFIABLE` result. Baseline 1 and baseline 2 remain
+  documented as historical evidence.
 
-Transaction hashes, the canonical source hash, and authoritative report
+Transaction hashes, canonical source hashes, and authoritative report
 readback are recorded in
 [`docs/verification-evidence.md`](docs/verification-evidence.md). The live
 result applies only to the pinned source revision and implemented policy. It is

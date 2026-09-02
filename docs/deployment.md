@@ -78,6 +78,15 @@ The RPC and explorer values may be omitted to use the values shipped by the
 installed `genlayer-js` chain definition. Keeping them explicit makes the release
 configuration reviewable.
 
+Baseline-3 production release configuration on 2026-09-02:
+
+```text
+VITE_NETWORK_NAME=testnetBradbury
+VITE_REGISTRY_ADDRESS=0xab90cA3d5d8E9341c1681475e50343C423AA903f
+VITE_DEMO_REPOSITORY=horn111/equivlab
+VITE_DEMO_COMMIT=e60cae9cbc15a5f5c95fc27daac658f60c99ea99
+```
+
 Historical production release configuration for baseline 2 on 2026-09-02:
 
 ```text
