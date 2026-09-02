@@ -63,13 +63,13 @@ The RPC and explorer values may be omitted to use the values shipped by the
 installed `genlayer-js` chain definition. Keeping them explicit makes the release
 configuration reviewable.
 
-Production release on 2026-08-27:
+Production release configuration for baseline 2 on 2026-09-02:
 
 ```text
 VITE_NETWORK_NAME=testnetBradbury
-VITE_REGISTRY_ADDRESS=0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599
+VITE_REGISTRY_ADDRESS=0xb3DC5368F543b910A44fE42714077c7B8b1B4237
 VITE_DEMO_REPOSITORY=horn111/equivlab
-VITE_DEMO_COMMIT=ce007240d1cbb1b7a789348b566cb50cea9b80e7
+VITE_DEMO_COMMIT=ea9f1459da5f71f1f22e4e4fd41205431f97a6a6
 ```
 
 The production alias is <https://equivlab.vercel.app>. Vercel WAF applies a

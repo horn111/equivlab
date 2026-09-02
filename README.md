@@ -19,11 +19,11 @@ public consensus-path eligibility before `MEETS_BASELINE`.
 
 - Workbench: <https://equivlab.vercel.app>
 - Network: GenLayer Bradbury (`testnetBradbury`)
-- Registry: `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599`
-- Pinned fixture commit: `ce007240d1cbb1b7a789348b566cb50cea9b80e7`
-- Live matrix: hardened fact checker `MEETS_BASELINE`; permissionless tip jar
-  `FAIL` on `AUTH-01` and `VALUE-01`; schema-only validator `FAIL` on `CONS-01`
-  and `EVID-01`; deliberate hash mismatch `UNVERIFIABLE` for all twelve rules.
+- Registry: `0xb3DC5368F543b910A44fE42714077c7B8b1B4237`
+- Pinned fixture commit: `ea9f1459da5f71f1f22e4e4fd41205431f97a6a6`
+- Active policy: `gl-consensus-baseline-2`. Its registry was deployed on
+  2026-09-02 and starts with a separate audit history; the earlier baseline-1
+  matrix remains documented as historical evidence.
 
 Transaction hashes, the canonical source hash, and authoritative report
 readback are recorded in

@@ -25,15 +25,16 @@ security guarantee.
 | Evidence | Value |
 | --- | --- |
 | GitHub repository | <https://github.com/horn111/equivlab> |
-| Pinned fixture revision | `ce007240d1cbb1b7a789348b566cb50cea9b80e7` |
+| Pinned fixture revision | `ea9f1459da5f71f1f22e4e4fd41205431f97a6a6` |
 | Vercel production URL | <https://equivlab.vercel.app> |
 | GenLayer network | `testnetBradbury` |
-| Production registry | `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599` |
-| Registry deployment transaction | `0x4d0523f6633f52ad3d4e7b2e9d39efc1aa3f80ce931f126c43fd9e49848a5616` (`ACCEPTED`, `FINISHED_WITH_RETURN`) |
-| Registry count | `4` consensus-accepted audit records |
+| Production registry | `0xb3DC5368F543b910A44fE42714077c7B8b1B4237` |
+| Registry deployment transaction | `0xd759bb518bc96369acdce3ea3c61bafe6905735868b7afe5ae7914b16f7ec33b` (`ACCEPTED`, `FINISHED_WITH_RETURN`; not yet independently finalized when recorded) |
+| Initial registry count | `0` by live read on 2026-09-02 |
+| Historical baseline-1 registry | `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599` |
 | Edge abuse control | Published Vercel WAF rule: `/api/analyze`, 24 requests per 60 seconds per IP |
 
-## Live fixture matrix
+## Historical baseline-1 fixture matrix
 
 Every successful transaction below reached `ACCEPTED` and
 `FINISHED_WITH_RETURN` with five validator votes `AGREE`. At the time this
