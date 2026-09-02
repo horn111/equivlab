@@ -1054,6 +1054,7 @@ export default function App() {
           {report && <div
             className="results-column"
             id="local-report"
+            role="region"
             ref={resultSummaryRef}
             tabIndex={-1}
             aria-label={`Local analysis result: ${report.status}`}
