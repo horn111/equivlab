@@ -181,12 +181,21 @@ function parseAudit(value: unknown): OnChainAuditRecord {
 
 function parseReport(value: unknown): AuditReport {
   const report = parseJsonObject(value, 'Report')
+  const source = report.source as Record<string, unknown> | undefined
   if (
-    typeof report.policy !== 'string'
+    report.schema !== 'equivlab-report-v2'
+    || typeof report.policy !== 'string'
     || typeof report.status !== 'string'
     || typeof report.report_sha256 !== 'string'
-    || !report.source
-    || typeof report.source !== 'object'
+    || !Array.isArray(report.failed_rules)
+    || !Array.isArray(report.findings)
+    || !Array.isArray(report.implemented_rules)
+    || !Array.isArray(report.unverifiable_rules)
+    || !Array.isArray(report.warning_rules)
+    || !source
+    || typeof source.canonical_sha256 !== 'string'
+    || source.mode !== 'retrieved'
+    || typeof source.url !== 'string'
   ) {
     throw new Error('Report readback omitted required policy fields.')
   }

@@ -38,7 +38,7 @@ _sdk_loader.CACHE_DIR = ROOT / ".gltest-cache"
 CONTRACT_PATH = "contracts/consensus_safety_registry.py"
 RUNTIME = "v0.2.16"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-POLICY = "gl-consensus-baseline-2"
+POLICY = "gl-consensus-baseline-3"
 
 
 def canonical_source(source: str) -> str:

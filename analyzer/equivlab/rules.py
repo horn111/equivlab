@@ -1,16 +1,16 @@
-"""Deterministic cores for gl-consensus-baseline-2."""
+"""Deterministic cores for gl-consensus-baseline-3."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 from .ast_index import AstIndex, FunctionInfo
 from .call_paths import CallPathAnalyzer
+from .source_identity import validate_source_url
 
 
-POLICY_ID = "gl-consensus-baseline-2"
+POLICY_ID = "gl-consensus-baseline-3"
 IMPLEMENTED_RULES = (
     "AUTH-01",
     "BOUND-01",
@@ -63,23 +63,30 @@ class RuleResult:
         return SEVERITIES[self.rule]
 
 
-def evaluate_src(source_url: str, expected_sha256: str | None, actual_sha256: str) -> RuleResult:
+def evaluate_src(
+    source_url: str,
+    expected_sha256: str | None,
+    actual_sha256: str,
+    source_mode: str = "retrieved",
+) -> RuleResult:
     expected = (expected_sha256 or "").lower().removeprefix("sha256:")
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         return RuleResult("SRC-01", "UNVERIFIABLE", "A valid submitted canonical SHA-256 is required.")
     if expected != actual_sha256:
         return RuleResult("SRC-01", "UNVERIFIABLE", "Retrieved canonical source bytes do not match the submitted SHA-256.")
 
-    parsed = urlparse(source_url)
-    if parsed.scheme != "https":
-        return RuleResult("SRC-01", "FAIL", "Source URL must use HTTPS.")
-    if (parsed.hostname or "").lower() != "raw.githubusercontent.com":
-        return RuleResult("SRC-01", "FAIL", "Source URL host is not approved by this policy version.")
-    parts = [part for part in parsed.path.split("/") if part]
-    if len(parts) < 4 or not re.fullmatch(r"[0-9a-fA-F]{40}", parts[2]):
-        return RuleResult("SRC-01", "FAIL", "Source URL must contain a full 40-hex Git commit.")
-    if parsed.query or parsed.fragment:
-        return RuleResult("SRC-01", "FAIL", "Pinned source URL must not contain a query or fragment.")
+    try:
+        validate_source_url(source_url)
+    except ValueError as exc:
+        return RuleResult("SRC-01", "FAIL", str(exc))
+    if source_mode == "submitted":
+        return RuleResult(
+            "SRC-01",
+            "UNVERIFIABLE",
+            "Submitted bytes match the claimed digest, but the source URL-to-bytes binding was not independently retrieved.",
+        )
+    if source_mode != "retrieved":
+        return RuleResult("SRC-01", "UNVERIFIABLE", "Source provenance mode is not recognized by this policy version.")
     return RuleResult("SRC-01", "MEETS_BASELINE", "Source URL and canonical SHA-256 meet the pinned-source rule.")
 
 
@@ -291,15 +298,15 @@ def evaluate_url(index: AstIndex) -> RuleResult:
 def evaluate_state(index: AstIndex) -> RuleResult:
     graph = CallPathAnalyzer(index)
     failures: list[Evidence] = []
-    for function in index.public_write_functions:
-        if not function.consensus_calls:
-            continue
-        first_consensus = min(call.line for call in function.consensus_calls)
-        for write in function.state_writes:
-            if write.line < first_consensus:
-                failures.append(
-                    Evidence(write.line, function.qualname, f"State write {write.target} occurs before consensus completes.")
-                )
+    for failure in graph.state_order_failures():
+        failures.append(
+            Evidence(
+                failure.write.line,
+                failure.function,
+                f"State write {failure.write.target} is reachable before consensus completes from {failure.root}.",
+            )
+        )
+    for function in _reachable_consensus_functions(index):
         for call in function.consensus_calls:
             for callback_name in (call.leader_name, call.validator_name):
                 callback = index.resolve_call(function, callback_name)

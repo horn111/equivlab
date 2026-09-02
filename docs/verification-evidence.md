@@ -8,17 +8,25 @@ security guarantee.
 
 | Gate | Result | Boundary |
 | --- | --- | --- |
-| Dependency-free Python suite | `122 passed` on 2026-09-02 | Analyzer, API boundary, contract eligibility, and contract stub; unrelated global pytest plugins disabled |
+| Dependency-free Python suite | `157 passed` on 2026-09-02 | Baseline-3 analyzer, API boundary, guard polarity, bounded work, contract eligibility, local/on-chain parity, and contract stub; unrelated global pytest plugins disabled |
 | GenLayer direct-mode suite | `8 passed` on 2026-09-02 | Official GenVM v0.2.16 runner with mocked web responses, including non-contract and missing-consensus outcomes |
 | Frontend unit/integration suite | `29 passed` on 2026-09-02 | Browser-local behavior, mixed `FAIL`/`UNVERIFIABLE` reports, SDK clients, EIP-1193 switching, and wallet/readback lifecycle |
 | Production frontend build | Passed on 2026-09-02 | TypeScript and Vite production compilation |
 | npm dependency audit | `0 vulnerabilities` on 2026-08-27 | Published npm dependency advisories |
-| Impeccable static detector | `0 findings` on 2026-08-27 | `web/src` source scan |
-| Responsive browser pass | Passed at 1440×900, 1440×700, and 390×844 on 2026-08-27 | Fixture switching, local analysis, result focus, registry recovery states, 44px targets, and horizontal overflow |
+| Impeccable static detector | `0 findings` on 2026-09-02 | Reviewer-facing `web/src` source and style scan |
+| Responsive browser pass | Passed at 1280×720 and 390×844 on 2026-09-02 | Default pinned retrieval, explicit preview mode, one-click non-contract outcome, visible rule-selection evidence, 44px targets, console errors, and horizontal overflow |
 | Production browser E2E | Passed on 2026-09-02 | Baseline-2 pinned fetch → `/api/analyze` 200 → local tip-jar `FAIL` → automatic source-matched audit `1` registry readback without wallet; hardened source returned `MEETS_BASELINE` |
 | Wallet connection browser test | Passed on 2026-08-27 | Simulated injected EIP-1193 provider → account authorization → Bradbury switch fallback → Bradbury network addition; no signature or transaction was simulated |
 | Production accessibility | `0` WCAG A/AA violations on 2026-09-02 | axe-core 4.12.1 after result-region semantics fix; contrast remained incomplete where pseudo-element backgrounds prevented automated calculation |
 | Production API observability | 200, `FAIL`, 2 ms application duration | Structured Vercel runtime log with request ID |
+
+## Baseline-3 release boundary
+
+The source tree implements `gl-consensus-baseline-3` and
+`equivlab-report-v2`. Local checks above are complete. A baseline-3 Bradbury
+registry address, deployment transaction, source-pinned audit matrix, and
+production promotion are not claimed until those external steps are completed
+and recorded below. Baseline-2 records remain immutable historical evidence.
 
 ## Release identity
 

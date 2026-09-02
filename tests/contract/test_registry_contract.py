@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 
 from equivlab.canonicalize import canonical_sha256
+from equivlab.report import analyze_source
 
 
 ROOT = Path(__file__).parents[2]
 CONTRACT_PATH = ROOT / "contracts" / "consensus_safety_registry.py"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
+POLICY = "gl-consensus-baseline-3"
 
 
 class _Decorator:
@@ -121,7 +123,7 @@ def arrange_consensus(runtime: FakeRuntime, source: str) -> None:
 
 
 def request(registry, source: str, name: str, supersedes_id: int | None = None):
-    args = (pinned_url(name), canonical_sha256(source), "gl-consensus-baseline-2")
+    args = (pinned_url(name), canonical_sha256(source), POLICY)
     if supersedes_id is None:
         return registry.request_audit(*args)
     return registry.request_superseding_audit(*args, supersedes_id)
@@ -146,6 +148,11 @@ def test_backdoored_tip_jar_records_expected_deterministic_failure() -> None:
     assert report(registry, audit_id)["status"] == "FAIL"
     assert report(registry, audit_id)["failed_rules"] == ["AUTH-01", "VALUE-01"]
     assert report(registry, audit_id)["unverifiable_rules"] == ["CONS-01"]
+    assert [finding["rule"] for finding in report(registry, audit_id)["findings"]] == [
+        "AUTH-01",
+        "CONS-01",
+        "VALUE-01",
+    ]
 
 
 def test_schema_only_checker_records_consensus_and_evidence_failures() -> None:
@@ -159,7 +166,7 @@ def test_schema_only_checker_records_consensus_and_evidence_failures() -> None:
 
 
 def test_hardened_revision_can_record_meets_baseline() -> None:
-    _module, registry, runtime = load_contract_module()
+    module, registry, runtime = load_contract_module()
     source = fixture_source("hardened_fact_checker")
     arrange_consensus(runtime, source)
 
@@ -168,6 +175,10 @@ def test_hardened_revision_can_record_meets_baseline() -> None:
     stored = report(registry, audit_id)
     assert stored["status"] == "MEETS_BASELINE"
     assert stored["failed_rules"] == []
+    assert stored["findings"] == []
+    assert stored["implemented_rules"] == sorted(module.RULE_IDS)
+    assert stored["schema"] == "equivlab-report-v2"
+    assert stored["source"]["mode"] == "retrieved"
     assert stored["warning_rules"] == []
     assert runtime.validator_accepted is True
 
@@ -211,7 +222,7 @@ def test_hash_mismatch_finalizes_unverifiable() -> None:
     audit_id = registry.request_audit(
         pinned_url("hardened_fact_checker"),
         "0" * 64,
-        "gl-consensus-baseline-2",
+        POLICY,
     )
 
     stored = report(registry, audit_id)
@@ -262,8 +273,8 @@ def test_same_bytes_at_distinct_urls_do_not_preempt_each_other() -> None:
     second = request(registry, source, "mirror_two")
 
     assert first == 0 and second == 1
-    assert registry.get_latest(pinned_url("mirror_one"), source_hash, "gl-consensus-baseline-2") == "0"
-    assert registry.get_latest(pinned_url("mirror_two"), source_hash, "gl-consensus-baseline-2") == "1"
+    assert registry.get_latest(pinned_url("mirror_one"), source_hash, POLICY) == "0"
+    assert registry.get_latest(pinned_url("mirror_two"), source_hash, POLICY) == "1"
 
 
 def test_challenges_are_append_only_and_preserve_report() -> None:
@@ -337,8 +348,8 @@ def test_latest_lookup_and_report_hash_are_stable() -> None:
     stored = report(registry, audit_id)
     claimed = stored.pop("report_sha256")
     assert claimed == module._sha256_text(module._canonical_json(stored))
-    assert registry.get_latest(pinned_url("hardened_fact_checker"), source_hash, "gl-consensus-baseline-2") == "0"
-    assert registry.get_latest(pinned_url("hardened_fact_checker"), "f" * 64, "gl-consensus-baseline-2") == ""
+    assert registry.get_latest(pinned_url("hardened_fact_checker"), source_hash, POLICY) == "0"
+    assert registry.get_latest(pinned_url("hardened_fact_checker"), "f" * 64, POLICY) == ""
 
 
 @pytest.mark.parametrize(
@@ -356,7 +367,7 @@ def test_latest_lookup_and_report_hash_are_stable() -> None:
 def test_source_url_rejects_noncanonical_or_unpinned_forms(source_url: str) -> None:
     _module, registry, _runtime = load_contract_module()
     with pytest.raises(ValueError, match="source URL"):
-        registry.request_audit(source_url, "a" * 64, "gl-consensus-baseline-2")
+        registry.request_audit(source_url, "a" * 64, POLICY)
 
 
 def _transfer_contract(guard: str) -> str:
@@ -434,3 +445,143 @@ def test_observation_validator_rejects_inconsistent_consensus_fields() -> None:
     assert module._validate_observation(bad_severity, source_hash, source_url) is False
 
     assert module._validate_observation(valid, source_hash, pinned_url("other")) is False
+
+
+@pytest.mark.parametrize("rule", ["bound_01", "result_01", "state_01", "url_01"])
+@pytest.mark.parametrize("outcome", ["pass", "fail"])
+def test_baseline3_local_and_contract_rule_pairs_have_status_parity(rule: str, outcome: str) -> None:
+    module, _registry, _runtime = load_contract_module()
+    source = (ROOT / "fixtures" / "rule_pairs" / rule / f"{outcome}.py").read_text(encoding="utf-8")
+    source_url = pinned_url(f"{rule}_{outcome}")
+    local = analyze_source(source, source_url, canonical_sha256(source), source_mode="retrieved")
+    failed, unverifiable = module._deterministic_findings(source, source_url)
+
+    assert failed == local["failed_rules"]
+    assert unverifiable == local["unverifiable_rules"]
+
+
+@pytest.mark.parametrize(
+    ("source", "rule"),
+    [
+        (
+            '''from genlayer import *
+class Probe(gl.Contract):
+    @gl.public.write
+    def run(self):
+        def evaluate(): return gl.nondet.exec_prompt("constant")
+        def leader(): return evaluate()
+        def validator(result):
+            if isinstance(result, gl.vm.Return):
+                return False
+            return evaluate() == result.calldata
+        gl.vm.run_nondet_unsafe(leader, validator)
+''',
+            "RESULT-01",
+        ),
+        (
+            '''from genlayer import *
+class Bounded(gl.Contract):
+    status: str
+    @gl.public.write
+    def decide(self):
+        def evaluate(): return gl.nondet.exec_prompt("constant")
+        def leader(): return evaluate()
+        def validator(result):
+            if not isinstance(result, gl.vm.Return): return False
+            return evaluate() == result.calldata
+        decision = gl.vm.run_nondet_unsafe(leader, validator)
+        status = str(decision)
+        if status in ("YES", "NO"):
+            raise ValueError("inverted")
+        self.status = status
+''',
+            "BOUND-01",
+        ),
+        (
+            '''from genlayer import *
+class Fetcher(gl.Contract):
+    @gl.public.write
+    def fetch(self, url: str):
+        if url.startswith("https://raw.githubusercontent.com/"):
+            raise ValueError("inverted")
+        if len(url) > 500: raise ValueError("long")
+        def evaluate(): return gl.nondet.web.render(url, mode="text")
+        def leader(): return evaluate()
+        def validator(result):
+            if not isinstance(result, gl.vm.Return): return False
+            return evaluate() == result.calldata
+        gl.vm.run_nondet_unsafe(leader, validator)
+''',
+            "URL-01",
+        ),
+        (
+            '''from genlayer import *
+class Settlement(gl.Contract):
+    settled: bool
+    recipient: Address
+    payout: u256
+    @gl.public.write
+    def settle(self):
+        if not self.settled: raise ValueError("inverted")
+        self.settled = True
+        gl.eth_transfer(self.recipient, self.payout)
+''',
+            "REPLAY-01",
+        ),
+    ],
+)
+def test_contract_rejects_adversarial_guard_polarity(source: str, rule: str) -> None:
+    module, _registry, _runtime = load_contract_module()
+    failed, _unverifiable = module._deterministic_findings(source, pinned_url("adversarial"))
+    assert rule in failed
+
+
+def test_contract_state_rule_follows_same_class_consensus_helpers() -> None:
+    module, _registry, _runtime = load_contract_module()
+    source = '''from genlayer import *
+class Decision(gl.Contract):
+    status: str
+    def _prepare(self):
+        self.status = "PENDING"
+    def _consensus(self):
+        def evaluate(): return gl.nondet.exec_prompt("constant")
+        def leader(): return evaluate()
+        def validator(result):
+            if not isinstance(result, gl.vm.Return): return False
+            return evaluate() == result.calldata
+        return gl.vm.run_nondet_unsafe(leader, validator)
+    @gl.public.write
+    def decide(self):
+        self._prepare()
+        self._consensus()
+'''
+    failed, unverifiable = module._deterministic_findings(source, pinned_url("helper_state"))
+    assert "STATE-01" in failed
+    assert "CONS-01" not in unverifiable
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_baseline3_local_and_contract_follow_helper_transfer_paths(guarded: bool) -> None:
+    module, _registry, _runtime = load_contract_module()
+    guard = "        assert gl.message.sender_address == self.owner\n" if guarded else ""
+    source = f'''from genlayer import *
+class Vault(gl.Contract):
+    owner: Address
+    def _send(self, recipient: str):
+        gl.eth_transfer(Address(recipient), self.balance)
+    @gl.public.write
+    def withdraw(self, recipient: str):
+{guard}        self._send(recipient)
+'''
+    source_url = pinned_url("helper_transfer")
+    local = analyze_source(source, source_url, canonical_sha256(source), source_mode="retrieved")
+    failed, unverifiable = module._deterministic_findings(source, source_url)
+
+    assert failed == local["failed_rules"]
+    assert unverifiable == local["unverifiable_rules"]
+    if guarded:
+        assert "AUTH-01" not in failed
+        assert "VALUE-01" not in failed
+    else:
+        assert "AUTH-01" in failed
+        assert "VALUE-01" in failed

@@ -458,7 +458,7 @@ button:disabled {
 
 .fixture-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-bottom: 1px solid var(--line);
   background: var(--graphite-1);
 }
@@ -543,13 +543,13 @@ button:disabled {
 }
 
 .fixture-strip strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-family: var(--display);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 500;
+  line-height: 1.05;
   letter-spacing: 0.04em;
+  text-wrap: balance;
   text-transform: uppercase;
 }
 
@@ -814,6 +814,13 @@ textarea:hover { border-color: var(--input-hover); }
   align-items: center;
   gap: 8px;
   cursor: pointer;
+}
+
+.source-mode-toggle span {
+  max-width: 24ch;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .source-mode-toggle input {
@@ -1086,9 +1093,10 @@ textarea {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .finding-panel {
+  scroll-margin-block: 18px;
   min-height: 255px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
+  grid-template-columns: minmax(0, 1fr) 220px;
 }
 
 .finding-empty,
@@ -1184,6 +1192,7 @@ textarea {
 .report-seal .exact-value { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 .report-seal .exact-value-actions { justify-content: flex-start; }
 .report-seal .exact-value-action:first-child { border-left: 0; }
+.report-seal .exact-value-action span { display: none; }
 
 .scope-statement {
   margin: 0;

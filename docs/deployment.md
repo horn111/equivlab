@@ -16,12 +16,13 @@ VITE_DEMO_REPOSITORY=<owner>/<repository>
 VITE_DEMO_COMMIT=<full-40-character-commit>
 ```
 
-Verify that all three raw URLs return the committed files:
+Verify that all four raw URLs return the committed files:
 
 ```text
 https://raw.githubusercontent.com/<owner>/<repository>/<commit>/fixtures/backdoored_tip_jar/contract.py
 https://raw.githubusercontent.com/<owner>/<repository>/<commit>/fixtures/schema_only_fact_checker/contract.py
 https://raw.githubusercontent.com/<owner>/<repository>/<commit>/fixtures/hardened_fact_checker/contract.py
+https://raw.githubusercontent.com/<owner>/<repository>/<commit>/analyzer/equivlab/canonicalize.py
 ```
 
 Never use `main`, another branch name, or a shortened hash as source identity.
@@ -63,7 +64,7 @@ The RPC and explorer values may be omitted to use the values shipped by the
 installed `genlayer-js` chain definition. Keeping them explicit makes the release
 configuration reviewable.
 
-Production release configuration for baseline 2 on 2026-09-02:
+Historical production release configuration for baseline 2 on 2026-09-02:
 
 ```text
 VITE_NETWORK_NAME=testnetBradbury
@@ -71,6 +72,10 @@ VITE_REGISTRY_ADDRESS=0xb3DC5368F543b910A44fE42714077c7B8b1B4237
 VITE_DEMO_REPOSITORY=horn111/equivlab
 VITE_DEMO_COMMIT=ea9f1459da5f71f1f22e4e4fd41205431f97a6a6
 ```
+
+Do not reuse the baseline-2 registry address for baseline 3. Deploy the updated
+contract, then replace the registry address and pinned fixture commit in Vercel
+before promoting the release.
 
 The production alias is <https://equivlab.vercel.app>. Vercel WAF applies a
 fixed-window rate limit of 24 requests per 60 seconds per IP to `/api/analyze`;
@@ -80,7 +85,7 @@ the Python function also enforces its own bounded per-client limiter.
 
 On the production URL:
 
-1. Disable **Use bundled preview** so the analyzer retrieves the commit-pinned raw URL.
+1. Confirm **Analyze editor preview instead** is off so the analyzer retrieves the commit-pinned raw URL.
 2. Analyze the permissionless tip jar and confirm `FAIL` for `AUTH-01` and `VALUE-01`.
 3. Analyze the schema-only validator and confirm `FAIL` for `CONS-01` and `EVID-01`.
 4. Analyze the hardened fixture and confirm `MEETS_BASELINE`.

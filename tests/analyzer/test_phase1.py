@@ -44,7 +44,7 @@ def report_for(name: str) -> dict[str, object]:
 
 
 def test_policy_declares_all_deterministic_rules_as_implemented() -> None:
-    policy = json.loads((ROOT / "policies" / "gl-consensus-baseline-2.json").read_text(encoding="utf-8"))
+    policy = json.loads((ROOT / "policies" / "gl-consensus-baseline-3.json").read_text(encoding="utf-8"))
     implemented = sorted(rule["id"] for rule in policy["rules"] if rule["implemented"])
     assert implemented == ALL_RULES
     assert "public consensus path" in policy["status_meanings"]["MEETS_BASELINE"]
@@ -203,4 +203,10 @@ def test_cli_emits_the_same_stable_report_and_failure_exit_code() -> None:
         stdout=output,
     )
     assert exit_code == 1
-    assert json.loads(output.getvalue()) == report_for("backdoored_tip_jar")
+    expected = analyze_source(
+        source,
+        pinned_url("backdoored_tip_jar"),
+        canonical_sha256(source),
+        source_mode="submitted",
+    )
+    assert json.loads(output.getvalue()) == expected

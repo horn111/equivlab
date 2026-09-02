@@ -104,7 +104,7 @@ describe('authoritative readback', () => {
         challenged: false,
         created_at: '2026-08-25T00:00:00Z',
         id: '7',
-        policy: 'gl-consensus-baseline-2',
+        policy: 'gl-consensus-baseline-3',
         requester: ADDRESS,
         source_hash: SOURCE_HASH,
         source_url: SOURCE_URL,
@@ -116,12 +116,12 @@ describe('authoritative readback', () => {
         failed_rules: ['AUTH-01'],
         findings: [],
         implemented_rules: ['AUTH-01'],
-        policy: 'gl-consensus-baseline-2',
+        policy: 'gl-consensus-baseline-3',
         report_sha256: '5'.repeat(64),
-        schema: 'equivlab-report-v1',
+        schema: 'equivlab-report-v2',
         severity: 'CRITICAL',
         scope: 'Bounded on-chain observation.',
-        source: { canonical_sha256: SOURCE_HASH, url: SOURCE_URL },
+        source: { canonical_sha256: SOURCE_HASH, mode: 'retrieved', url: SOURCE_URL },
         status: 'FAIL',
         unverifiable_rules: [],
         warning_rules: [],
@@ -132,7 +132,7 @@ describe('authoritative readback', () => {
       config,
       SOURCE_HASH,
       SOURCE_URL,
-      'gl-consensus-baseline-2',
+      'gl-consensus-baseline-3',
       TX_HASH,
     )
     expect(result.audit.id).toBe('7')
@@ -141,7 +141,7 @@ describe('authoritative readback', () => {
     expect(readContract).toHaveBeenNthCalledWith(1, {
       address: ADDRESS,
       functionName: 'get_latest',
-      args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-2'],
+      args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-3'],
     })
   })
 
@@ -153,12 +153,12 @@ describe('authoritative readback', () => {
       config,
       SOURCE_HASH,
       SOURCE_URL,
-      'gl-consensus-baseline-2',
+      'gl-consensus-baseline-3',
     )).resolves.toBeNull()
     expect(readContract).toHaveBeenCalledWith({
       address: ADDRESS,
       functionName: 'get_latest',
-      args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-2'],
+      args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-3'],
     })
   })
 })

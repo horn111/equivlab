@@ -11,7 +11,10 @@ const IMPLEMENTED_RULES = [
 ]
 const TIP_JAR_URL = 'https://raw.githubusercontent.com/horn111/equivlab/aef703943cef6a6d9c3f65545072711d78d44417/fixtures/backdoored_tip_jar/contract.py'
 
-async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<AnalyzeResponse> {
+async function makeFailResponse(
+  overrides: Partial<AuditReport> = {},
+  sourceMode: AnalyzeResponse['source_mode'] = 'retrieved',
+): Promise<AnalyzeResponse> {
   const base: AuditReport = {
     failed_rules: ['AUTH-01', 'VALUE-01'],
     findings: [
@@ -38,12 +41,12 @@ async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<A
       },
     ],
     implemented_rules: IMPLEMENTED_RULES,
-    policy: 'gl-consensus-baseline-2',
+    policy: 'gl-consensus-baseline-3',
     report_sha256: '0'.repeat(64),
-    schema: 'equivlab-report-v1',
+    schema: 'equivlab-report-v2',
     severity: 'CRITICAL',
     scope: 'Twelve deterministic rule cores only.',
-    source: { canonical_sha256: await sourceSha256(backdooredTipJar), url: TIP_JAR_URL },
+    source: { canonical_sha256: await sourceSha256(backdooredTipJar), mode: sourceMode, url: TIP_JAR_URL },
     status: 'FAIL',
     unverifiable_rules: ['CONS-01'],
     warning_rules: [],
@@ -54,7 +57,7 @@ async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<A
     source: { ...base.source, ...overrides.source },
   }
   report.report_sha256 = await reportSha256(report)
-  return { source_mode: 'submitted', report }
+  return { source_mode: sourceMode, report }
 }
 
 afterEach(() => {
@@ -123,13 +126,17 @@ describe('EquivLab workbench', () => {
   it('keeps local findings available before any wallet connection', async () => {
     const user = userEvent.setup()
     const failResponse = await makeFailResponse()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => failResponse }))
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => failResponse })
+    vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
     const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
     await waitFor(() => expect(analyzeButton).toBeEnabled())
     await user.click(analyzeButton)
 
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<string, unknown>
+    expect(requestBody).not.toHaveProperty('source')
+    expect(screen.getByRole('checkbox', { name: /analyze editor preview instead/i })).not.toBeChecked()
     expect((await screen.findAllByText(/no preceding caller-derived authority guard/i)).length).toBeGreaterThan(0)
     expect(screen.getAllByText('AUTH-01').length).toBeGreaterThan(0)
     expect(screen.getAllByText('VALUE-01').length).toBeGreaterThan(0)
@@ -143,8 +150,8 @@ describe('EquivLab workbench', () => {
 
   it('reproduces a bundled preview from the pinned source without dropping the connected wallet', async () => {
     const user = userEvent.setup()
-    const submitted = await makeFailResponse()
-    const retrieved: AnalyzeResponse = { ...submitted, source_mode: 'retrieved' }
+    const submitted = await makeFailResponse({}, 'submitted')
+    const retrieved = await makeFailResponse({}, 'retrieved')
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => submitted })
       .mockResolvedValueOnce({ ok: true, json: async () => retrieved })
@@ -161,17 +168,18 @@ describe('EquivLab workbench', () => {
     }
     render(<App />)
 
+    await user.click(screen.getByRole('checkbox', { name: /analyze editor preview instead/i }))
     const analyzeButton = await screen.findByRole('button', { name: /analyze revision/i })
     await waitFor(() => expect(analyzeButton).toBeEnabled())
     await user.click(analyzeButton)
     await user.click(await screen.findByRole('button', { name: /connect wallet/i }))
-    await user.click(screen.getByRole('button', { name: /reproduce pinned source/i }))
+    await user.click(screen.getByRole('button', { name: /retrieve pinned source/i }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     const secondBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>
     expect(secondBody).not.toHaveProperty('source')
-    expect(await screen.findByText('Fetched pinned source')).toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: /use bundled preview/i })).not.toBeChecked()
+    expect(await screen.findByText('Retrieve pinned revision')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /analyze editor preview instead/i })).not.toBeChecked()
     expect(screen.getByTitle(address)).toBeInTheDocument()
   })
 
@@ -270,6 +278,7 @@ describe('EquivLab workbench', () => {
     expect(screen.getByRole('button', { name: /permissionless tip jar/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /schema-only validator/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /hardened fact checker/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /plain python file/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /hash mismatch/i })).toBeInTheDocument()
   })
 })

@@ -29,6 +29,7 @@ export interface AuditReport {
   scope: string
   source: {
     canonical_sha256: string
+    mode: 'retrieved' | 'submitted'
     url: string
   }
   status: AuditStatus
@@ -48,7 +49,7 @@ export interface SourceIdentity {
   source: string
 }
 
-export type FixtureId = 'tip-jar' | 'schema-only' | 'hardened' | 'unverifiable'
+export type FixtureId = 'tip-jar' | 'schema-only' | 'hardened' | 'plain-python' | 'unverifiable'
 
 export interface FixtureDefinition {
   id: FixtureId

@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None, stdout: TextIO | None = None) -> int:
     args = build_parser().parse_args(argv)
-    report = analyze_source(args.source.read_bytes(), args.url, args.sha256)
+    report = analyze_source(args.source.read_bytes(), args.url, args.sha256, source_mode="submitted")
     (stdout or sys.stdout).write(dumps_report(report))
     return 0 if report["status"] in {"MEETS_BASELINE", "WARN"} else 1
 

@@ -15,6 +15,7 @@ import { XIcon } from '@phosphor-icons/react/X'
 import backdooredTipJar from '../../fixtures/backdoored_tip_jar/contract.py?raw'
 import hardenedFactChecker from '../../fixtures/hardened_fact_checker/contract.py?raw'
 import schemaOnlyFactChecker from '../../fixtures/schema_only_fact_checker/contract.py?raw'
+import plainPython from '../../analyzer/equivlab/canonicalize.py?raw'
 import type {
   AnalyzeResponse,
   AuditReport,
@@ -29,7 +30,7 @@ import type {
 import AttestationBoundary from './AttestationBoundary'
 import ExactValue from './ExactValue'
 
-const POLICY_ID = 'gl-consensus-baseline-2'
+const POLICY_ID = 'gl-consensus-baseline-3'
 const DEMO_REPOSITORY = import.meta.env.VITE_DEMO_REPOSITORY?.trim() || 'horn111/equivlab'
 const PINNED_COMMIT = import.meta.env.VITE_DEMO_COMMIT?.trim() || 'aef703943cef6a6d9c3f65545072711d78d44417'
 const RULES = [
@@ -81,6 +82,15 @@ const FIXTURES: FixtureDefinition[] = [
     note: 'Independent evaluation, bounded state, explicit result handling, and framed evidence.',
   },
   {
+    id: 'plain-python',
+    label: 'Plain Python file',
+    path: 'analyzer/equivlab/canonicalize.py',
+    contract: plainPython,
+    expected: 'UNVERIFIABLE',
+    expectedRules: ['NON-CONTRACT'],
+    note: 'Ordinary Python source with no gl.Contract or public consensus path.',
+  },
+  {
     id: 'unverifiable',
     label: 'Hash mismatch',
     path: 'fixtures/backdoored_tip_jar/contract.py',
@@ -106,7 +116,7 @@ const RULE_NEXT_CHANGE: Partial<Record<string, string>> = {
   'EVID-01': 'Re-observe material evidence inside the validator before accepting the result.',
 }
 
-const STORAGE_KEY = 'equivlab:history:v2'
+const STORAGE_KEY = 'equivlab:history:v3'
 
 export function canonicalizeSource(source: string): string {
   const withoutBom = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source
@@ -289,7 +299,7 @@ function isAuditReport(value: unknown): value is AuditReport {
   if (!value || typeof value !== 'object') return false
   const report = value as Record<string, unknown>
   const source = report.source as Record<string, unknown> | undefined
-  if (!(report.schema === 'equivlab-report-v1'
+  if (!(report.schema === 'equivlab-report-v2'
     && report.policy === POLICY_ID
     && typeof report.status === 'string'
     && AUDIT_STATUSES.has(report.status as AuditStatus)
@@ -307,7 +317,9 @@ function isAuditReport(value: unknown): value is AuditReport {
     && !!source
     && typeof source.url === 'string'
     && typeof source.canonical_sha256 === 'string'
-    && HASH_256.test(source.canonical_sha256))) return false
+    && HASH_256.test(source.canonical_sha256)
+    && typeof source.mode === 'string'
+    && SOURCE_MODES.has(source.mode as AnalyzeResponse['source_mode']))) return false
 
   const implemented = report.implemented_rules as string[]
   const failed = report.failed_rules as string[]
@@ -341,6 +353,7 @@ async function isReproducedResponse(
   return SOURCE_MODES.has(response.source_mode)
     && isAuditReport(response.report)
     && isCoherentResult(identity, response.report)
+    && response.report.source.mode === response.source_mode
     && response.report.source.canonical_sha256 === sourceDigest
     && response.report.report_sha256 === await reportSha256(response.report)
 }
@@ -749,7 +762,7 @@ export default function App() {
   const [fixtureId, setFixtureId] = useState<FixtureId>(initialFixture)
   const [identity, setIdentity] = useState<SourceIdentity>(() => restoredShare?.identity ?? fixtureIdentity(fixtureById(initialFixture)))
   const [sourceDigest, setSourceDigest] = useState<string | null>(null)
-  const [usePreview, setUsePreview] = useState(true)
+  const [usePreview, setUsePreview] = useState(false)
   const [report, setReport] = useState<AuditReport | null>(null)
   const [sourceMode, setSourceMode] = useState<AnalyzeResponse['source_mode'] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -767,6 +780,8 @@ export default function App() {
   const controller = useRef<AbortController | null>(null)
   const resultSummaryRef = useRef<HTMLDivElement | null>(null)
   const sourcePanelRef = useRef<HTMLElement | null>(null)
+  const ruleFocusRef = useRef<HTMLDivElement | null>(null)
+  const findingPanelRef = useRef<HTMLElement | null>(null)
   const commitInputRef = useRef<HTMLInputElement | null>(null)
   const analyzeActionRef = useRef<HTMLButtonElement | null>(null)
   const focusResultAfterAnalysis = useRef(false)
@@ -774,6 +789,17 @@ export default function App() {
   const sourceUrl = pinnedSourceUrl(identity)
   const activeFinding = report?.findings.find((finding) => finding.rule === activeRule) ?? null
   const expectedDigest = fixtureId === 'unverifiable' ? '0'.repeat(64) : sourceDigest
+
+  const selectRule = useCallback((rule: string) => {
+    setActiveRule(rule)
+    window.requestAnimationFrame(() => {
+      const target = report ? findingPanelRef.current : ruleFocusRef.current
+      if (!target) return
+      const bounds = target.getBoundingClientRect()
+      const visible = bounds.top >= 0 && bounds.bottom <= window.innerHeight
+      if (!visible) target.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+    })
+  }, [report])
 
   useEffect(() => {
     let alive = true
@@ -867,7 +893,7 @@ export default function App() {
     const fixture = fixtureById(id)
     setFixtureId(id)
     updateIdentity(fixtureIdentity(fixture))
-    setUsePreview(true)
+    setUsePreview(false)
   }
 
   const focusSourceControl = (control: HTMLInputElement | HTMLButtonElement | null) => {
@@ -935,7 +961,7 @@ export default function App() {
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</p>
       <a className="skip-link" href="#source-title">Skip to source</a>
       {report && <a className="skip-link skip-results" href="#spectrum-title">Skip to report</a>}
-      <PolicyRail activeRule={activeRule} onSelect={setActiveRule} />
+      <PolicyRail activeRule={activeRule} onSelect={selectRule} />
       <main onKeyDown={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !loading && sourceDigest) {
           event.preventDefault()
@@ -969,7 +995,7 @@ export default function App() {
           </div>
         )}
 
-        <div className="responsive-rule-focus">
+        <div className="responsive-rule-focus" ref={ruleFocusRef}>
           <RuleFocus report={report} activeRule={activeRule} />
         </div>
 
@@ -1003,8 +1029,10 @@ export default function App() {
             </div>
 
             <div className={`source-authority ${usePreview ? 'source-authority-preview' : 'source-authority-pinned'}`} role="status">
-              <div><span>ANALYZED MATERIAL</span><strong>{usePreview ? 'Bundled fixture preview' : 'Fetched pinned source'}</strong></div>
-              <p>{usePreview ? 'Submitted bytes · not fetched from GitHub' : 'Remote bytes must match the pinned digest'}</p>
+              <div><span>SOURCE PROVENANCE</span><strong>{usePreview ? 'Local preview only' : 'Retrieve pinned revision'}</strong></div>
+              <p>{usePreview
+                ? 'Submitted editor bytes; SRC-01 remains UNVERIFIABLE and registry submission stays disabled.'
+                : 'Recommended: fetch the exact commit-pinned URL and verify its canonical digest.'}</p>
               <label className="source-mode-toggle">
                 <input type="checkbox" checked={usePreview} onChange={(event) => {
                   setUsePreview(event.target.checked)
@@ -1012,7 +1040,7 @@ export default function App() {
                   setSourceMode(null)
                   setSourceOpen(true)
                 }} />
-                <span>Use bundled preview</span>
+                <span>Analyze editor preview instead</span>
               </label>
             </div>
 
@@ -1059,8 +1087,8 @@ export default function App() {
             tabIndex={-1}
             aria-label={`Local analysis result: ${report.status}`}
           >
-            <RuleSpectrum report={report} activeRule={activeRule} onSelect={setActiveRule} loading={loading} />
-            <section className="finding-panel" aria-label="Selected rule evidence">
+            <RuleSpectrum report={report} activeRule={activeRule} onSelect={selectRule} loading={loading} />
+            <section className="finding-panel" ref={findingPanelRef} aria-label="Selected rule evidence">
               <FindingReadout finding={activeFinding} activeRule={activeRule} report={report} />
               {report && (
                 <div className="report-seal">

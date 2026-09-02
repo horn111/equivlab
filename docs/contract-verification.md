@@ -26,14 +26,15 @@ The dependency-free suite imports the actual contract source with a deterministi
 GenLayer runtime stub. It covers `MEETS_BASELINE`, `WARN`, `FAIL`, and
 `UNVERIFIABLE`; fetch/hash failure; leader/validator source disagreement before
 storage writes; duplicate audit; challenge; supersession; latest lookup; report
-hashing; and adversarial authority-guard shapes.
+hashing; adversarial guard polarity; helper-mediated transfer and consensus
+paths; deterministic resource limits; and retrieved/submitted provenance.
 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest
 ```
 
-Current dependency-free result: `122 passed`; the direct-mode module is skipped
+Current dependency-free result: `157 passed`; the direct-mode module is skipped
 when `genlayer-test` is unavailable.
 
 The genuine GenLayer direct-mode suite contains eight additional tests:
@@ -44,7 +45,7 @@ python -m venv .venv-direct
 .venv-direct\Scripts\python.exe -m pytest tests/direct -v
 ```
 
-Verified on 2026-08-24 with `genlayer-test==0.29.2`, `genlayer-py==0.16.3`,
+Verified again on 2026-09-02 with `genlayer-test==0.29.2`, `genlayer-py==0.16.3`,
 Python 3.12.0, and the official GenVM v0.2.16 universal artifact:
 
 - artifact size: `216630904` bytes;

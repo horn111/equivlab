@@ -47,12 +47,12 @@ const report: AuditReport = {
   failed_rules: ['AUTH-01', 'VALUE-01'],
   findings: [],
   implemented_rules: ['AUTH-01', 'VALUE-01'],
-  policy: 'gl-consensus-baseline-2',
+  policy: 'gl-consensus-baseline-3',
   report_sha256: '6'.repeat(64),
-  schema: 'equivlab-report-v1',
+  schema: 'equivlab-report-v2',
   severity: 'CRITICAL',
   scope: 'Test report.',
-  source: { canonical_sha256: SOURCE_HASH, url: SOURCE_URL },
+  source: { canonical_sha256: SOURCE_HASH, mode: 'retrieved', url: SOURCE_URL },
   status: 'FAIL',
   unverifiable_rules: [],
   warning_rules: [],
@@ -184,8 +184,8 @@ describe('attestation lifecycle', () => {
     render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="submitted" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     await user.click(screen.getByRole('button', { name: /connect wallet/i }))
 
-    expect(screen.getByText(/this report used bundled preview bytes/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /reproduce pinned source/i }))
+    expect(screen.getByText(/this report used submitted editor bytes/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /retrieve pinned source/i }))
     expect(onUsePinnedSource).toHaveBeenCalledOnce()
   })
 })

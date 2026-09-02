@@ -1,7 +1,7 @@
 # EquivLab
 
 EquivLab is a deterministic Python source analyzer for the twelve rules in the
-`gl-consensus-baseline-2` policy. It combines AST facts with bounded call-path
+`gl-consensus-baseline-3` policy. It combines AST facts with bounded call-path
 tracing and has no semantic model dependency.
 
 The four possible report statuses are `MEETS_BASELINE`, `WARN`, `FAIL`, and
@@ -9,8 +9,11 @@ The four possible report statuses are `MEETS_BASELINE`, `WARN`, `FAIL`, and
 meets the implemented rules of the named policy. It is not formal verification
 or a security guarantee.
 
-The exact deterministic acceptance conditions and known limits are documented
-in [`docs/policy-gl-consensus-baseline-2.md`](docs/policy-gl-consensus-baseline-2.md).
+The exact deterministic acceptance conditions, resource bounds, and known
+limits are documented in
+[`docs/policy-gl-consensus-baseline-3.md`](docs/policy-gl-consensus-baseline-3.md).
+Baseline 2 remains available as historical policy documentation; existing
+registry observations are never reinterpreted under a newer policy.
 The fixture corpus contains a full `pass.py`/`fail.py` pair for every rule. Rule
 evaluators isolate each negative case; complete reports also enforce contract and
 public consensus-path eligibility before `MEETS_BASELINE`.
@@ -19,13 +22,15 @@ public consensus-path eligibility before `MEETS_BASELINE`.
 
 - Workbench: <https://equivlab.vercel.app>
 - Network: GenLayer Bradbury (`testnetBradbury`)
-- Registry: `0xb3DC5368F543b910A44fE42714077c7B8b1B4237`
+- Registry: `0xb3DC5368F543b910A44fE42714077c7B8b1B4237` (baseline-2 historical deployment)
 - Pinned fixture commit: `ea9f1459da5f71f1f22e4e4fd41205431f97a6a6`
-- Active policy: `gl-consensus-baseline-2`. The live matrix records the hardened
+- Current public release policy: `gl-consensus-baseline-2`. The live matrix records the hardened
   fact checker as `MEETS_BASELINE`, the permissionless tip jar as `FAIL` on
   `AUTH-01` and `VALUE-01`, the schema-only validator as `FAIL` on `CONS-01`
   and `EVID-01`, and a plain Python source as `UNVERIFIABLE`. The earlier
-  baseline-1 matrix remains documented as historical evidence.
+  baseline-1 matrix remains documented as historical evidence. The source tree
+  implements baseline 3; production is not labelled baseline 3 until a separate
+  registry deployment and fresh source-pinned evidence are recorded.
 
 Transaction hashes, the canonical source hash, and authoritative report
 readback are recorded in
@@ -64,9 +69,10 @@ npm run dev -- --host 127.0.0.1
 The workbench opens at `http://127.0.0.1:5173`. It includes the permissionless
 tip jar, schema-only validator, hardened fact checker, and hash-mismatch cases.
 Reports saved in the archive are browser-local records, not on-chain attestations.
-Bundled fixture previews are submitted source bytes and cannot be attested. An
-attestation requires a successful server-side retrieval of the exact commit-pinned
-GitHub source and a matching canonical SHA-256.
+The default path retrieves the exact commit-pinned GitHub source. Editor-preview
+analysis is an explicit secondary mode: it keeps `SRC-01` `UNVERIFIABLE` and
+cannot be attested. The reference workflow also includes an ordinary Python file
+that returns an explicit non-contract `UNVERIFIABLE` outcome.
 
 Build and test the web slice:
 

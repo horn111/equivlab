@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .ast_index import AstIndex
+from .ast_index import AnalysisLimitExceeded, AstIndex
 from .canonicalize import SourceDecodeError, canonicalize_source
 from .rules import IMPLEMENTED_RULES, POLICY_ID, Evidence, RuleResult, evaluate_ast_rules, evaluate_src
 
@@ -23,16 +23,16 @@ def _finding(result: RuleResult) -> dict[str, object]:
     }
 
 
-def _base_report(source_url: str, source_hash: str) -> dict[str, object]:
+def _base_report(source_url: str, source_hash: str, source_mode: str) -> dict[str, object]:
     return {
         "failed_rules": [],
         "findings": [],
         "implemented_rules": list(IMPLEMENTED_RULES),
         "policy": POLICY_ID,
-        "schema": "equivlab-report-v1",
+        "schema": "equivlab-report-v2",
         "severity": "LOW",
         "scope": "Twelve deterministic rule cores only; semantic supplements are not evaluated. This is not formal verification or a security guarantee.",
-        "source": {"canonical_sha256": source_hash, "url": source_url},
+        "source": {"canonical_sha256": source_hash, "mode": source_mode, "url": source_url},
         "status": "MEETS_BASELINE",
         "unverifiable_rules": [],
         "warning_rules": [],
@@ -78,11 +78,17 @@ def _finish_report(report: dict[str, object], results: list[RuleResult]) -> dict
     return report
 
 
-def analyze_source(source: bytes | str, source_url: str, expected_sha256: str | None) -> dict[str, object]:
+def analyze_source(
+    source: bytes | str,
+    source_url: str,
+    expected_sha256: str | None,
+    *,
+    source_mode: str = "retrieved",
+) -> dict[str, object]:
     try:
         canonical = canonicalize_source(source)
     except SourceDecodeError:
-        report = _base_report(source_url, "")
+        report = _base_report(source_url, "", source_mode)
         results = [
             RuleResult(rule, "UNVERIFIABLE", "Source is not valid UTF-8, so this rule could not be evaluated.")
             for rule in IMPLEMENTED_RULES
@@ -90,9 +96,9 @@ def analyze_source(source: bytes | str, source_url: str, expected_sha256: str | 
         return _finish_report(report, results)
 
     source_hash = hashlib.sha256(canonical).hexdigest()
-    report = _base_report(source_url, source_hash)
-    source_result = evaluate_src(source_url, expected_sha256, source_hash)
-    if source_result.status == "UNVERIFIABLE":
+    report = _base_report(source_url, source_hash, source_mode)
+    source_result = evaluate_src(source_url, expected_sha256, source_hash, source_mode)
+    if source_result.status == "UNVERIFIABLE" and source_mode != "submitted":
         blocked = [
             RuleResult(rule, "UNVERIFIABLE", "Rule evaluation is not authoritative because source identity was not established.")
             for rule in IMPLEMENTED_RULES
@@ -113,6 +119,15 @@ def analyze_source(source: bytes | str, source_url: str, expected_sha256: str | 
         ]
         return _finish_report(report, [source_result, *blocked])
 
+    except AnalysisLimitExceeded as exc:
+        evidence = (Evidence(1, "<module>", str(exc)),)
+        blocked = [
+            RuleResult(rule, "UNVERIFIABLE", "Deterministic analysis limits were exceeded.", evidence)
+            for rule in IMPLEMENTED_RULES
+            if rule != "SRC-01"
+        ]
+        return _finish_report(report, [source_result, *blocked])
+
     if not index.has_recognizable_contract:
         evidence = (Evidence(1, "<module>", "Expected a class inheriting gl.Contract with at least one @gl.public.write or @gl.public.write.payable entrypoint."),)
         blocked = [
@@ -122,7 +137,16 @@ def analyze_source(source: bytes | str, source_url: str, expected_sha256: str | 
         ]
         return _finish_report(report, [source_result, *blocked])
 
-    return _finish_report(report, [source_result, *evaluate_ast_rules(index)])
+    try:
+        ast_results = evaluate_ast_rules(index)
+    except AnalysisLimitExceeded as exc:
+        evidence = (Evidence(1, "<module>", str(exc)),)
+        ast_results = [
+            RuleResult(rule, "UNVERIFIABLE", "Deterministic analysis limits were exceeded.", evidence)
+            for rule in IMPLEMENTED_RULES
+            if rule != "SRC-01"
+        ]
+    return _finish_report(report, [source_result, *ast_results])
 
 
 def dumps_report(report: dict[str, object]) -> str:

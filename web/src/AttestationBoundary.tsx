@@ -410,11 +410,11 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
         <div className="registry-guidance" role="status">
           <div>
             <strong>Pinned source required</strong>
-            <p>This report used bundled preview bytes. Fetch and reproduce the exact commit-pinned source before requesting an attestation.</p>
+            <p>This report used submitted editor bytes. Retrieve and reproduce the exact commit-pinned source before requesting an attestation.</p>
           </div>
           <button className="secondary-action" type="button" onClick={onUsePinnedSource} disabled={analysisLoading}>
             {analysisLoading ? <SpinnerGapIcon className="spin" /> : <ArrowClockwiseIcon />}
-            {analysisLoading ? 'Reproducing source' : 'Reproduce pinned source'}
+            {analysisLoading ? 'Retrieving source' : 'Retrieve pinned source'}
           </button>
         </div>
       )}

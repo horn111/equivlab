@@ -3,29 +3,26 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 import uuid
 from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 from equivlab.report import analyze_source
+from equivlab.source_identity import MAX_CANONICAL_SOURCE_BYTES, validate_source_url
 
 
-MAX_SOURCE_BYTES = 512_000
+MAX_SOURCE_BYTES = MAX_CANONICAL_SOURCE_BYTES
 FETCH_TIMEOUT_SECONDS = 12
 RATE_LIMIT_REQUESTS = 24
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_CLIENT_CAPACITY = 2_048
 REPORT_CACHE_CAPACITY = 128
 REPORT_CACHE_TTL_SECONDS = 900
-APPROVED_SOURCE_HOST = "raw.githubusercontent.com"
-COMMIT_SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 
 
 class _RejectRedirects(HTTPRedirectHandler):
@@ -93,35 +90,7 @@ def _cache_put(key: tuple[str, str], payload: dict[str, object], now: float | No
 
 
 def _validate_source_url(url: str) -> str:
-    if url != url.strip() or len(url) == 0 or len(url) > 1_000:
-        raise ValueError("Source URL is empty, padded, or too long.")
-
-    parsed = urlparse(url)
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("Source URL contains an invalid port.") from exc
-
-    if (
-        parsed.scheme != "https"
-        or (parsed.hostname or "").lower() != APPROVED_SOURCE_HOST
-        or parsed.username is not None
-        or parsed.password is not None
-        or port is not None
-        or bool(parsed.query)
-        or bool(parsed.fragment)
-    ):
-        raise ValueError("Source URL must use the approved raw GitHub HTTPS host without credentials, ports, query, or fragment.")
-
-    encoded_parts = [part for part in parsed.path.split("/") if part]
-    decoded_parts = [unquote(part) for part in encoded_parts]
-    if (
-        len(decoded_parts) < 4
-        or COMMIT_SHA_PATTERN.fullmatch(decoded_parts[2]) is None
-        or any(part in {".", ".."} or "/" in part or "\\" in part or "\x00" in part for part in decoded_parts)
-    ):
-        raise ValueError("Source URL must contain an organization, repository, full commit SHA, and file path.")
-    return url
+    return validate_source_url(url)
 
 
 def _fetch_source(url: str) -> bytes:
@@ -130,10 +99,10 @@ def _fetch_source(url: str) -> bytes:
     with _SOURCE_OPENER.open(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
         content_length = response.headers.get("Content-Length")
         if content_length and int(content_length) > MAX_SOURCE_BYTES:
-            raise ValueError("Source exceeds the 512 KB analysis limit.")
+            raise ValueError("Source exceeds the 100 KB policy limit.")
         source = response.read(MAX_SOURCE_BYTES + 1)
     if len(source) > MAX_SOURCE_BYTES:
-        raise ValueError("Source exceeds the 512 KB analysis limit.")
+        raise ValueError("Source exceeds the 100 KB policy limit.")
     return source
 
 
@@ -208,17 +177,17 @@ class handler(BaseHTTPRequestHandler):
                 return
             payload = json.loads(self.rfile.read(length))
             source_url, expected_sha256, supplied_source = _request_fields(payload)
+            if not source_url:
+                self._send(
+                    400,
+                    {"error": "source_url is required for every analysis mode.", "request_id": request_id},
+                    request_id=request_id,
+                )
+                self._log_result(request_id, 400, started_at, outcome="missing_source_url")
+                return
+            validated_url = _validate_source_url(source_url)
 
             if supplied_source is None:
-                if not source_url:
-                    self._send(
-                        400,
-                        {"error": "source_url is required when source text is not supplied.", "request_id": request_id},
-                        request_id=request_id,
-                    )
-                    self._log_result(request_id, 400, started_at, outcome="missing_source_url")
-                    return
-                validated_url = _validate_source_url(source_url)
                 cache_key = (validated_url, expected_sha256.lower().removeprefix("sha256:"))
                 cached = _cache_get(cache_key)
                 if cached is not None:
@@ -229,11 +198,11 @@ class handler(BaseHTTPRequestHandler):
                 source_mode = "retrieved"
             else:
                 if len(supplied_source.encode("utf-8")) > MAX_SOURCE_BYTES:
-                    raise ValueError("Source exceeds the 512 KB analysis limit.")
+                    raise ValueError("Source exceeds the 100 KB policy limit.")
                 source = supplied_source
                 source_mode = "submitted"
 
-            report = analyze_source(source, source_url, expected_sha256)
+            report = analyze_source(source, validated_url, expected_sha256, source_mode=source_mode)
             response_payload: dict[str, object] = {"report": report, "source_mode": source_mode}
             if supplied_source is None:
                 _cache_put(cache_key, response_payload)

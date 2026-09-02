@@ -4,7 +4,26 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Callable, Iterable
+
+
+MAX_AST_NODES = 20_000
+MAX_DEPENDENCY_STEPS = 100_000
+
+
+class AnalysisLimitExceeded(ValueError):
+    """Raised when deterministic static-analysis work exceeds policy limits."""
+
+
+class _AnalysisBudget:
+    def __init__(self, limit: int, label: str):
+        self.remaining = limit
+        self.label = label
+
+    def consume(self) -> None:
+        self.remaining -= 1
+        if self.remaining < 0:
+            raise AnalysisLimitExceeded(f"{self.label} exceeded the deterministic analysis budget")
 
 
 def dotted_name(node: ast.AST | None) -> str:
@@ -101,46 +120,88 @@ class FunctionInfo:
 
 
 class _DependencyResolver:
-    def __init__(self, parameters: Iterable[str], assignments: dict[str, list[ast.AST]]):
+    def __init__(
+        self,
+        parameters: Iterable[str],
+        assignments: dict[str, list[ast.AST]],
+        budget: _AnalysisBudget,
+    ):
         self.parameters = set(parameters)
         self.assignments = assignments
+        self.budget = budget
+        self._assignment_cache: dict[tuple[str, int, int], tuple[ast.AST, ...]] = {}
+        self._dependency_cache: dict[tuple[int, frozenset[str]], frozenset[str]] = {}
 
     def _assignments_before(self, name: str, node: ast.AST) -> list[ast.AST]:
         use_line = getattr(node, "lineno", 0)
-        return [value for value in self.assignments.get(name, []) if getattr(value, "lineno", 0) < use_line]
+        use_column = getattr(node, "col_offset", 0)
+        key = (name, use_line, use_column)
+        cached = self._assignment_cache.get(key)
+        if cached is None:
+            cached = tuple(
+                value
+                for value in self.assignments.get(name, [])
+                if (getattr(value, "lineno", 0), getattr(value, "col_offset", 0)) < (use_line, use_column)
+            )
+            self._assignment_cache[key] = cached
+        return list(cached)
 
     def dependencies(self, node: ast.AST | None, seen: frozenset[str] = frozenset()) -> set[str]:
         if node is None:
             return set()
+        key = (id(node), seen)
+        cached = self._dependency_cache.get(key)
+        if cached is not None:
+            return set(cached)
+        self.budget.consume()
         name = dotted_name(node)
         if name == "gl.message.sender_address" or name.startswith("gl.message.sender_address."):
-            return {"sender"}
+            result = {"sender"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
         if name == "gl.message.value" or name.startswith("gl.message.value."):
-            return {"message.value"}
+            result = {"message.value"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
         if name == "gl.message_raw" or name.startswith("gl.message_raw"):
-            return {"node-time"}
+            result = {"node-time"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
         if name.startswith("self."):
-            return {"state"}
+            result = {"state"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
         if isinstance(node, ast.Name):
             if node.id in self.parameters:
-                return {f"parameter:{node.id}"}
+                result = {f"parameter:{node.id}"}
+                self._dependency_cache[key] = frozenset(result)
+                return result
             assignments = self._assignments_before(node.id, node)
             if assignments and node.id not in seen:
                 result: set[str] = set()
                 for assignment in assignments:
                     result.update(self.dependencies(assignment, seen | {node.id}))
+                self._dependency_cache[key] = frozenset(result)
                 return result
+            self._dependency_cache[key] = frozenset()
             return set()
         if isinstance(node, ast.Call) and dotted_name(node.func) == "gl.vm.run_nondet_unsafe":
-            return {"consensus-result"}
+            result = {"consensus-result"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
         if isinstance(node, ast.Call) and dotted_name(node.func).startswith("gl.nondet.web."):
-            return {"nondeterministic", "web"}
+            result = {"nondeterministic", "web"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
         if isinstance(node, ast.Call) and dotted_name(node.func).startswith("gl.nondet."):
-            return {"model-output", "nondeterministic"}
+            result = {"model-output", "nondeterministic"}
+            self._dependency_cache[key] = frozenset(result)
+            return result
 
         result: set[str] = set()
         for child in ast.iter_child_nodes(node):
             result.update(self.dependencies(child, seen))
+        self._dependency_cache[key] = frozenset(result)
         return result
 
     def source(self, node: ast.AST | None, seen: frozenset[str] = frozenset()) -> str:
@@ -149,10 +210,6 @@ class _DependencyResolver:
             if assignments:
                 return self.source(assignments[-1], seen | {node.id})
         return rendered(node)
-
-
-def _contains_blocking(statements: list[ast.stmt]) -> bool:
-    return any(isinstance(node, (ast.Raise, ast.Return)) for statement in statements for node in ast.walk(statement))
 
 
 def _statement_always_blocks(statement: ast.stmt) -> bool:
@@ -175,6 +232,192 @@ def _suite_always_blocks(statements: list[ast.stmt]) -> bool:
     # guard would bless calls or transfers that execute first in the rejecting
     # branch.
     return bool(statements) and _statement_always_blocks(statements[0])
+
+
+def _suite_rejects_result(statements: list[ast.stmt]) -> bool:
+    if not statements:
+        return False
+    first = statements[0]
+    if isinstance(first, ast.Raise):
+        return True
+    return isinstance(first, ast.Return) and isinstance(first.value, ast.Constant) and first.value.value is False
+
+
+def _boolean_outcome_entails(
+    node: ast.BoolOp,
+    truth: bool,
+    predicate: Callable[[ast.AST, bool], bool],
+) -> bool:
+    outcomes = [predicate(value, truth) for value in node.values]
+    if isinstance(node.op, ast.And):
+        return any(outcomes) if truth else all(outcomes)
+    return all(outcomes) if truth else any(outcomes)
+
+
+def _condition_entails_invalid_result(node: ast.AST, truth: bool, parameter: str) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _condition_entails_invalid_result(node.operand, not truth, parameter)
+    if isinstance(node, ast.BoolOp):
+        return _boolean_outcome_entails(
+            node,
+            truth,
+            lambda value, outcome: _condition_entails_invalid_result(value, outcome, parameter),
+        )
+    if not isinstance(node, ast.Call) or dotted_name(node.func) != "isinstance" or len(node.args) < 2:
+        return False
+    return rendered(node.args[0]) == parameter and rendered(node.args[1]) == "gl.vm.Return" and not truth
+
+
+def _is_result_guard(node: ast.If, parameter: str) -> bool:
+    return (
+        _suite_rejects_result(node.body) and _condition_entails_invalid_result(node.test, True, parameter)
+    ) or (
+        _suite_rejects_result(node.orelse) and _condition_entails_invalid_result(node.test, False, parameter)
+    )
+
+
+def _condition_entails_bounded_rejection(node: ast.AST, truth: bool, resolver: _DependencyResolver) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _condition_entails_bounded_rejection(node.operand, not truth, resolver)
+    if isinstance(node, ast.BoolOp):
+        return _boolean_outcome_entails(
+            node,
+            truth,
+            lambda value, outcome: _condition_entails_bounded_rejection(value, outcome, resolver),
+        )
+    if not isinstance(node, ast.Compare) or not (resolver.dependencies(node) & {"consensus-result", "model-output"}):
+        return False
+    if len(node.ops) != 1:
+        return False
+    operator = node.ops[0]
+    if isinstance(operator, (ast.NotIn, ast.NotEq)):
+        return truth
+    if isinstance(operator, (ast.In, ast.Eq)):
+        return not truth
+    return isinstance(operator, (ast.Lt, ast.LtE, ast.Gt, ast.GtE))
+
+
+def _is_bounded_guard(node: ast.If, resolver: _DependencyResolver) -> bool:
+    return (
+        _suite_always_blocks(node.body) and _condition_entails_bounded_rejection(node.test, True, resolver)
+    ) or (
+        _suite_always_blocks(node.orelse) and _condition_entails_bounded_rejection(node.test, False, resolver)
+    )
+
+
+def _condition_entails_terminal_state(node: ast.AST, truth: bool, resolver: _DependencyResolver) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _condition_entails_terminal_state(node.operand, not truth, resolver)
+    if isinstance(node, ast.BoolOp):
+        return _boolean_outcome_entails(
+            node,
+            truth,
+            lambda value, outcome: _condition_entails_terminal_state(value, outcome, resolver),
+        )
+    expression = rendered(node).lower()
+    if "state" not in resolver.dependencies(node) or not any(marker in expression for marker in _TERMINAL_MARKERS):
+        return False
+    if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)):
+        return truth
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        if isinstance(node.ops[0], (ast.Eq, ast.Is, ast.In)):
+            return truth
+        if isinstance(node.ops[0], (ast.NotEq, ast.IsNot, ast.NotIn)):
+            return not truth
+    return False
+
+
+def _is_replay_guard(node: ast.If, resolver: _DependencyResolver) -> bool:
+    return (
+        _suite_always_blocks(node.body) and _condition_entails_terminal_state(node.test, True, resolver)
+    ) or (
+        _suite_always_blocks(node.orelse) and _condition_entails_terminal_state(node.test, False, resolver)
+    )
+
+
+def _named_subject(node: ast.AST, subjects: set[str]) -> bool:
+    return isinstance(node, ast.Name) and node.id in subjects
+
+
+def _url_prefix_call(node: ast.AST, subjects: set[str]) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "startswith"
+        and _named_subject(node.func.value, subjects)
+        and bool(node.args)
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+        and node.args[0].value == "https://raw.githubusercontent.com/"
+    )
+
+
+def _len_subject(node: ast.AST, subjects: set[str]) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and dotted_name(node.func) == "len"
+        and len(node.args) == 1
+        and _named_subject(node.args[0], subjects)
+    )
+
+
+def _len_set_subject(node: ast.AST, subjects: set[str]) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and dotted_name(node.func) == "len"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Call)
+        and dotted_name(node.args[0].func) == "set"
+        and len(node.args[0].args) == 1
+        and _named_subject(node.args[0].args[0], subjects)
+    )
+
+
+def _condition_entails_url_invalid(node: ast.AST, truth: bool, kind: str, subjects: set[str]) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _condition_entails_url_invalid(node.operand, not truth, kind, subjects)
+    if isinstance(node, ast.BoolOp):
+        return _boolean_outcome_entails(
+            node,
+            truth,
+            lambda value, outcome: _condition_entails_url_invalid(value, outcome, kind, subjects),
+        )
+    if kind in {"scheme", "host"}:
+        return _url_prefix_call(node, subjects) and not truth
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        return False
+    left, right, operator = node.left, node.comparators[0], node.ops[0]
+    if kind == "length":
+        if _len_subject(left, subjects) and isinstance(right, ast.Constant) and isinstance(right.value, int):
+            if isinstance(operator, (ast.Gt, ast.GtE)):
+                return truth
+            if isinstance(operator, (ast.Lt, ast.LtE)):
+                return not truth
+        if isinstance(left, ast.Constant) and isinstance(left.value, int) and _len_subject(right, subjects):
+            if isinstance(operator, (ast.Lt, ast.LtE)):
+                return truth
+            if isinstance(operator, (ast.Gt, ast.GtE)):
+                return not truth
+        return False
+    if kind == "duplicate":
+        pair = (_len_set_subject(left, subjects) and _len_subject(right, subjects)) or (
+            _len_subject(left, subjects) and _len_set_subject(right, subjects)
+        )
+        if not pair:
+            return False
+        if isinstance(operator, (ast.NotEq, ast.IsNot)):
+            return truth
+        if isinstance(operator, (ast.Eq, ast.Is)):
+            return not truth
+    return False
+
+
+def _is_url_guard(node: ast.If, kind: str, subjects: set[str]) -> bool:
+    return (
+        _suite_always_blocks(node.body) and _condition_entails_url_invalid(node.test, True, kind, subjects)
+    ) or (
+        _suite_always_blocks(node.orelse) and _condition_entails_url_invalid(node.test, False, kind, subjects)
+    )
 
 
 def _sender_state_orientation(left: ast.AST, right: ast.AST, resolver: _DependencyResolver) -> str | None:
@@ -262,13 +505,33 @@ class _AssignmentCollector(ast.NodeVisitor):
 
 
 class _FunctionScanner(ast.NodeVisitor):
-    def __init__(self, info: FunctionInfo, node: ast.FunctionDef | ast.AsyncFunctionDef):
+    def __init__(
+        self,
+        info: FunctionInfo,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        dependency_budget: _AnalysisBudget,
+    ):
         self.info = info
         self.top_level_statement_ids = {id(statement) for statement in node.body}
+        url_parameters = {name for name in info.parameters if "url" in name.lower() or "source" in name.lower()}
+        self.url_guard_subjects: dict[int, set[str]] = {
+            id(statement): set(url_parameters) for statement in node.body if isinstance(statement, ast.If)
+        }
+        for statement in node.body:
+            if not isinstance(statement, (ast.For, ast.AsyncFor)):
+                continue
+            if not isinstance(statement.target, ast.Name) or not isinstance(statement.iter, ast.Name):
+                continue
+            if statement.iter.id not in url_parameters:
+                continue
+            subjects = {statement.target.id}
+            for child in statement.body:
+                if isinstance(child, ast.If):
+                    self.url_guard_subjects[id(child)] = subjects
         collector = _AssignmentCollector()
         for statement in node.body:
             collector.visit(statement)
-        self.resolver = _DependencyResolver(info.parameters, collector.assignments)
+        self.resolver = _DependencyResolver(info.parameters, collector.assignments, dependency_budget)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return
@@ -319,30 +582,24 @@ class _FunctionScanner(ast.NodeVisitor):
     def visit_If(self, node: ast.If) -> None:
         if id(node) in self.top_level_statement_ids and _is_authority_guard(node, self.resolver):
             self.info.authority_guards.append(AuthorityGuard(node.lineno, rendered(node.test)))
-        expression = rendered(node.test)
-        expression_lower = expression.lower()
-        dependencies = self.resolver.dependencies(node.test)
-        blocking = _contains_blocking(node.body) or _contains_blocking(node.orelse)
-        if blocking:
-            for call in (item for item in ast.walk(node.test) if isinstance(item, ast.Call)):
-                if dotted_name(call.func) != "isinstance" or len(call.args) < 2:
-                    continue
-                parameter = rendered(call.args[0])
-                checked_type = rendered(call.args[1])
-                if parameter in self.info.parameters and checked_type in {"gl.vm.Result", "gl.vm.Return"}:
+        if id(node) in self.top_level_statement_ids:
+            for parameter in self.info.parameters:
+                if _is_result_guard(node, parameter):
                     self.info.result_guard_parameters.append(parameter)
-            if dependencies & {"consensus-result", "model-output"} and isinstance(node.test, (ast.Compare, ast.BoolOp)):
+            if _is_bounded_guard(node, self.resolver):
                 self.info.bounded_guard_lines.append(node.lineno)
-            if "https://" in expression_lower and "startswith" in expression_lower:
-                self.info.url_scheme_guard_lines.append(node.lineno)
-            if "raw.githubusercontent.com" in expression_lower or "allowed_hosts" in expression_lower:
-                self.info.url_host_guard_lines.append(node.lineno)
-            if "len(" in expression_lower and any(token in expression_lower for token in ("url", "source")):
-                self.info.url_length_guard_lines.append(node.lineno)
-            if "set(" in expression_lower and "len(" in expression_lower:
-                self.info.url_duplicate_guard_lines.append(node.lineno)
-            if "state" in dependencies and any(marker in expression_lower for marker in _TERMINAL_MARKERS):
+            if _is_replay_guard(node, self.resolver):
                 self.info.replay_guard_lines.append(node.lineno)
+        subjects = self.url_guard_subjects.get(id(node))
+        if subjects:
+            if _is_url_guard(node, "scheme", subjects):
+                self.info.url_scheme_guard_lines.append(node.lineno)
+            if _is_url_guard(node, "host", subjects):
+                self.info.url_host_guard_lines.append(node.lineno)
+            if _is_url_guard(node, "length", subjects):
+                self.info.url_length_guard_lines.append(node.lineno)
+            if _is_url_guard(node, "duplicate", subjects):
+                self.info.url_duplicate_guard_lines.append(node.lineno)
         self.generic_visit(node)
 
     def visit_Assert(self, node: ast.Assert) -> None:
@@ -410,12 +667,18 @@ class AstIndex:
         self.tree = tree
         self.functions = functions
         self.contract_classes = contract_classes
+        self.analysis_cache: dict[str, object] = {}
+        self.analysis_metrics: dict[str, int] = {}
 
     @classmethod
     def build(cls, source: str) -> "AstIndex":
         tree = ast.parse(source)
+        ast_node_count = sum(1 for _ in ast.walk(tree))
+        if ast_node_count > MAX_AST_NODES:
+            raise AnalysisLimitExceeded("Python AST exceeds the deterministic node budget")
         functions: dict[str, FunctionInfo] = {}
         contract_classes: dict[str, int] = {}
+        dependency_budget = _AnalysisBudget(MAX_DEPENDENCY_STEPS, "dependency analysis")
 
         def collect(body: list[ast.stmt], class_name: str | None = None, parent: str | None = None) -> None:
             for node in body:
@@ -453,7 +716,7 @@ class AstIndex:
                         parameters=parameters,
                         public_kind=public_kind,
                     )
-                    scanner = _FunctionScanner(info, node)
+                    scanner = _FunctionScanner(info, node, dependency_budget)
                     for statement in node.body:
                         scanner.visit(statement)
                     info.calls.sort()
@@ -478,7 +741,12 @@ class AstIndex:
                     collect(node.body, class_name, qualname)
 
         collect(tree.body)
-        return cls(tree, functions, contract_classes)
+        index = cls(tree, functions, contract_classes)
+        index.analysis_metrics = {
+            "ast_nodes": ast_node_count,
+            "dependency_steps": MAX_DEPENDENCY_STEPS - dependency_budget.remaining,
+        }
+        return index
 
     @property
     def has_recognizable_contract(self) -> bool:
