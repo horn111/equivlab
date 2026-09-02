@@ -35,7 +35,7 @@ os.unlink = _tolerant_unlink
 
 ROOT = Path(__file__).parents[2]
 _sdk_loader.CACHE_DIR = ROOT / ".gltest-cache"
-CONTRACT_PATH = "contracts/consensus_safety_registry.py"
+CONTRACT_PATH = os.environ.get("EQUIVLAB_CONTRACT_PATH", "contracts/consensus_safety_registry.py")
 RUNTIME = "v0.2.16"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 POLICY = "gl-consensus-baseline-3"

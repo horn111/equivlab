@@ -101,6 +101,17 @@ python -m pytest
 Disabling plugin autoload keeps unrelated globally installed pytest plugins
 out of this dependency-free test suite.
 
+Bradbury deployment uses a deterministic schema-preserving compact build to
+stay within the chain's transaction pubdata ceiling:
+
+```powershell
+python -m pip install -r requirements-deploy.txt
+python tools/build_deployment_contract.py
+```
+
+The generated file is ignored; [`docs/deployment.md`](docs/deployment.md)
+describes how to record its SHA-256 with the deployed revision.
+
 Run the analyzer without installing it:
 
 ```powershell

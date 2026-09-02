@@ -29,12 +29,26 @@ Never use `main`, another branch name, or a shortened hash as source identity.
 
 ## 2. Deploy the registry to GenLayer Bradbury
 
+Build the deterministic compact deployment source first. The build preserves
+the contract storage and method schema, retains all type annotations, and fails
+if the output exceeds the currently tested Bradbury payload ceiling:
+
+```powershell
+python -m pip install -r requirements-deploy.txt
+python tools/build_deployment_contract.py
+```
+
+The readable source remains `contracts/consensus_safety_registry.py`; the
+generated `build/consensus_safety_registry.py` is ignored and reproducible from
+the exact Git revision. Record the printed build SHA-256 with the release
+evidence.
+
 Install and authenticate the current GenLayer CLI, select Bradbury, and deploy
-the single source contract:
+the compact source contract:
 
 ```powershell
 genlayer network testnet-bradbury
-genlayer deploy --contract contracts/consensus_safety_registry.py
+genlayer deploy --contract build/consensus_safety_registry.py
 ```
 
 Save the deployment transaction hash and the returned contract address. Confirm

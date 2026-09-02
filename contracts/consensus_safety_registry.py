@@ -6,7 +6,7 @@ baseline. MEETS_BASELINE is not formal verification or a security guarantee.
 Narrative prose is excluded from the validator equality boundary.
 """
 
-from genlayer import *
+from genlayer import DynArray, TreeMap, gl, u64
 
 import ast
 import hashlib

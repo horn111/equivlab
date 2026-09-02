@@ -23,6 +23,13 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest
+      - name: Build compact deployment source
+        run: python tools/build_deployment_contract.py
+      - name: Verify compact deployment source against the contract suite
+        env:
+          EQUIVLAB_CONTRACT_PATH: build/consensus_safety_registry.py
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest tests/contract
 
   web:
     runs-on: ubuntu-latest

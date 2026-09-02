@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -13,7 +14,7 @@ from equivlab.report import analyze_source
 
 
 ROOT = Path(__file__).parents[2]
-CONTRACT_PATH = ROOT / "contracts" / "consensus_safety_registry.py"
+CONTRACT_PATH = Path(os.environ.get("EQUIVLAB_CONTRACT_PATH", ROOT / "contracts" / "consensus_safety_registry.py"))
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 POLICY = "gl-consensus-baseline-3"
 
