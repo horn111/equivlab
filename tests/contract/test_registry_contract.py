@@ -121,7 +121,7 @@ def arrange_consensus(runtime: FakeRuntime, source: str) -> None:
 
 
 def request(registry, source: str, name: str, supersedes_id: int | None = None):
-    args = (pinned_url(name), canonical_sha256(source), "gl-consensus-baseline-1")
+    args = (pinned_url(name), canonical_sha256(source), "gl-consensus-baseline-2")
     if supersedes_id is None:
         return registry.request_audit(*args)
     return registry.request_superseding_audit(*args, supersedes_id)
@@ -145,6 +145,7 @@ def test_backdoored_tip_jar_records_expected_deterministic_failure() -> None:
     assert audit_id == 0
     assert report(registry, audit_id)["status"] == "FAIL"
     assert report(registry, audit_id)["failed_rules"] == ["AUTH-01", "VALUE-01"]
+    assert report(registry, audit_id)["unverifiable_rules"] == ["CONS-01"]
 
 
 def test_schema_only_checker_records_consensus_and_evidence_failures() -> None:
@@ -171,6 +172,37 @@ def test_hardened_revision_can_record_meets_baseline() -> None:
     assert runtime.validator_accepted is True
 
 
+def test_plain_python_file_records_explicit_non_contract_outcome() -> None:
+    module, registry, runtime = load_contract_module()
+    source = "def helper():\n    return 1\n"
+    arrange_consensus(runtime, source)
+
+    audit_id = request(registry, source, "plain_python")
+
+    stored = report(registry, audit_id)
+    assert stored["status"] == "UNVERIFIABLE"
+    assert stored["failed_rules"] == []
+    assert stored["unverifiable_rules"] == [rule for rule in module.RULE_IDS if rule != "SRC-01"]
+
+
+def test_genlayer_contract_without_consensus_path_records_unverifiable() -> None:
+    _module, registry, runtime = load_contract_module()
+    source = """from genlayer import *
+class Storage(gl.Contract):
+    value: int
+    @gl.public.write
+    def set_value(self, value: int):
+        self.value = value
+"""
+    arrange_consensus(runtime, source)
+
+    audit_id = request(registry, source, "storage")
+
+    stored = report(registry, audit_id)
+    assert stored["status"] == "UNVERIFIABLE"
+    assert stored["unverifiable_rules"] == ["CONS-01"]
+
+
 def test_hash_mismatch_finalizes_unverifiable() -> None:
     _module, registry, runtime = load_contract_module()
     source = fixture_source("hardened_fact_checker")
@@ -179,7 +211,7 @@ def test_hash_mismatch_finalizes_unverifiable() -> None:
     audit_id = registry.request_audit(
         pinned_url("hardened_fact_checker"),
         "0" * 64,
-        "gl-consensus-baseline-1",
+        "gl-consensus-baseline-2",
     )
 
     stored = report(registry, audit_id)
@@ -230,8 +262,8 @@ def test_same_bytes_at_distinct_urls_do_not_preempt_each_other() -> None:
     second = request(registry, source, "mirror_two")
 
     assert first == 0 and second == 1
-    assert registry.get_latest(pinned_url("mirror_one"), source_hash, "gl-consensus-baseline-1") == "0"
-    assert registry.get_latest(pinned_url("mirror_two"), source_hash, "gl-consensus-baseline-1") == "1"
+    assert registry.get_latest(pinned_url("mirror_one"), source_hash, "gl-consensus-baseline-2") == "0"
+    assert registry.get_latest(pinned_url("mirror_two"), source_hash, "gl-consensus-baseline-2") == "1"
 
 
 def test_challenges_are_append_only_and_preserve_report() -> None:
@@ -305,8 +337,8 @@ def test_latest_lookup_and_report_hash_are_stable() -> None:
     stored = report(registry, audit_id)
     claimed = stored.pop("report_sha256")
     assert claimed == module._sha256_text(module._canonical_json(stored))
-    assert registry.get_latest(pinned_url("hardened_fact_checker"), source_hash, "gl-consensus-baseline-1") == "0"
-    assert registry.get_latest(pinned_url("hardened_fact_checker"), "f" * 64, "gl-consensus-baseline-1") == ""
+    assert registry.get_latest(pinned_url("hardened_fact_checker"), source_hash, "gl-consensus-baseline-2") == "0"
+    assert registry.get_latest(pinned_url("hardened_fact_checker"), "f" * 64, "gl-consensus-baseline-2") == ""
 
 
 @pytest.mark.parametrize(
@@ -324,7 +356,7 @@ def test_latest_lookup_and_report_hash_are_stable() -> None:
 def test_source_url_rejects_noncanonical_or_unpinned_forms(source_url: str) -> None:
     _module, registry, _runtime = load_contract_module()
     with pytest.raises(ValueError, match="source URL"):
-        registry.request_audit(source_url, "a" * 64, "gl-consensus-baseline-1")
+        registry.request_audit(source_url, "a" * 64, "gl-consensus-baseline-2")
 
 
 def _transfer_contract(guard: str) -> str:
@@ -360,8 +392,9 @@ class Vault(gl.Contract):
 )
 def test_adversarial_authority_guards_fail_closed(guard: str) -> None:
     module, _registry, _runtime = load_contract_module()
-    failed = module._deterministic_findings(_transfer_contract(guard), pinned_url("authority_case"))
+    failed, unverifiable = module._deterministic_findings(_transfer_contract(guard), pinned_url("authority_case"))
     assert "AUTH-01" in failed
+    assert unverifiable == ["CONS-01"]
     assert "VALUE-01" in failed
 
 
@@ -379,9 +412,10 @@ def test_adversarial_authority_guards_fail_closed(guard: str) -> None:
 )
 def test_valid_authority_guards_are_recognized(guard: str) -> None:
     module, _registry, _runtime = load_contract_module()
-    failed = module._deterministic_findings(_transfer_contract(guard), pinned_url("authority_case"))
+    failed, unverifiable = module._deterministic_findings(_transfer_contract(guard), pinned_url("authority_case"))
     assert "AUTH-01" not in failed
     assert "VALUE-01" not in failed
+    assert unverifiable == ["CONS-01"]
 
 
 def test_observation_validator_rejects_inconsistent_consensus_fields() -> None:

@@ -1,0 +1,92 @@
+{
+  "description": "Versioned baseline for inspectable GenLayer consensus-safety properties. MEETS_BASELINE requires a recognizable GenLayer contract and a public-write-reachable consensus path. Passing is not formal verification or a security guarantee.",
+  "id": "gl-consensus-baseline-2",
+  "report_schema": "equivlab-report-v1",
+  "rules": [
+    {
+      "deterministic_core": "Require an approved HTTPS source URL pinned to a full commit and an exact canonical SHA-256 match.",
+      "id": "SRC-01",
+      "implemented": true,
+      "severity": "CRITICAL"
+    },
+    {
+      "deterministic_core": "Require a recognizable gl.Contract with a public entrypoint, at least one public-write-reachable run_nondet_unsafe path, and independent validator evaluation.",
+      "id": "CONS-01",
+      "implemented": true,
+      "severity": "CRITICAL"
+    },
+    {
+      "deterministic_core": "Check Result/Return and null or error paths around nondeterministic execution.",
+      "id": "RESULT-01",
+      "implemented": true,
+      "severity": "HIGH"
+    },
+    {
+      "deterministic_core": "Check bounds on model-derived enum and range fields.",
+      "id": "BOUND-01",
+      "implemented": true,
+      "severity": "HIGH"
+    },
+    {
+      "deterministic_core": "Trace public value-transfer paths to caller-derived authority guards.",
+      "id": "AUTH-01",
+      "implemented": true,
+      "severity": "CRITICAL"
+    },
+    {
+      "deterministic_core": "Reject caller-controlled or nondeterministic transfer values and unguarded caller-controlled recipients.",
+      "id": "VALUE-01",
+      "implemented": true,
+      "severity": "CRITICAL"
+    },
+    {
+      "deterministic_core": "Check that validators independently re-observe external evidence.",
+      "id": "EVID-01",
+      "implemented": true,
+      "severity": "HIGH"
+    },
+    {
+      "deterministic_core": "Detect untrusted source content entering prompts without explicit evidence framing.",
+      "id": "PROMPT-01",
+      "implemented": true,
+      "severity": "HIGH"
+    },
+    {
+      "deterministic_core": "Check HTTPS, URL length, duplicate, and host constraints.",
+      "id": "URL-01",
+      "implemented": true,
+      "severity": "MEDIUM"
+    },
+    {
+      "deterministic_core": "Locate final-state writes relative to consensus and error paths.",
+      "id": "STATE-01",
+      "implemented": true,
+      "severity": "HIGH"
+    },
+    {
+      "deterministic_core": "Check terminal guards before repeated value settlement.",
+      "id": "REPLAY-01",
+      "implemented": true,
+      "severity": "HIGH"
+    },
+    {
+      "deterministic_core": "Reject caller-supplied authoritative timestamps.",
+      "id": "TIME-01",
+      "implemented": true,
+      "severity": "MEDIUM"
+    }
+  ],
+  "source_policy": {
+    "allowed_hosts": [
+      "raw.githubusercontent.com"
+    ],
+    "canonicalization": "utf8-bom-strip+lf-newlines+final-lf",
+    "github_commit_pattern": "^[0-9a-fA-F]{40}$"
+  },
+  "status_meanings": {
+    "FAIL": "At least one implemented rule found a policy violation. Other rules may remain explicitly unverifiable.",
+    "MEETS_BASELINE": "The supplied GenLayer contract revision has a public consensus path and meets the implemented rules only; this is not formal verification or a security guarantee.",
+    "UNVERIFIABLE": "The analyzer could not establish source identity, recognizable GenLayer contract structure, a public consensus path, or other facts required to evaluate a rule.",
+    "WARN": "No implemented rule failed, but at least one implemented rule produced a bounded warning."
+  }
+}

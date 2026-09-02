@@ -1,4 +1,4 @@
-"""Deterministic cores for gl-consensus-baseline-1."""
+"""Deterministic cores for gl-consensus-baseline-2."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from .ast_index import AstIndex
+from .ast_index import AstIndex, FunctionInfo
 from .call_paths import CallPathAnalyzer
 
 
-POLICY_ID = "gl-consensus-baseline-1"
+POLICY_ID = "gl-consensus-baseline-2"
 IMPLEMENTED_RULES = (
     "AUTH-01",
     "BOUND-01",
@@ -102,6 +102,14 @@ def _caller_dependency(dependencies: tuple[str, ...]) -> bool:
     return bool({"sender", "message.value"} & set(dependencies)) or _parameter_dependency(dependencies)
 
 
+def _reachable_consensus_functions(index: AstIndex) -> list[FunctionInfo]:
+    graph = CallPathAnalyzer(index)
+    reachable: set[str] = set()
+    for root in index.public_write_functions:
+        reachable.update(graph.reachable_functions(root.qualname))
+    return [index.functions[name] for name in sorted(reachable)]
+
+
 def evaluate_value(index: AstIndex) -> RuleResult:
     failures: list[Evidence] = []
     for path in CallPathAnalyzer(index).transfer_paths():
@@ -133,10 +141,18 @@ def evaluate_value(index: AstIndex) -> RuleResult:
 
 
 def evaluate_consensus(index: AstIndex) -> RuleResult:
+    if not index.has_recognizable_contract:
+        return RuleResult(
+            "CONS-01",
+            "UNVERIFIABLE",
+            "No recognizable GenLayer contract with a gl.Contract base and public entrypoint was found.",
+            (Evidence(1, "<module>", "Expected a class inheriting gl.Contract with at least one @gl.public entrypoint."),),
+        )
     graph = CallPathAnalyzer(index)
     failures: list[Evidence] = []
+    consensus_functions = _reachable_consensus_functions(index)
     consensus_count = 0
-    for function in sorted(index.functions.values(), key=lambda item: item.qualname):
+    for function in consensus_functions:
         for call in function.consensus_calls:
             consensus_count += 1
             validator = index.resolve_call(function, call.validator_name)
@@ -151,14 +167,22 @@ def evaluate_consensus(index: AstIndex) -> RuleResult:
     if failures:
         return RuleResult("CONS-01", "FAIL", "At least one validator checks leader output without independently invoking an evaluation path.", tuple(failures))
     if consensus_count == 0:
-        return RuleResult("CONS-01", "MEETS_BASELINE", "No run_nondet_unsafe consensus call is present in this source.")
+        return RuleResult(
+            "CONS-01",
+            "UNVERIFIABLE",
+            "A GenLayer contract was found, but no run_nondet_unsafe consensus path is reachable from a public write entrypoint.",
+            tuple(
+                Evidence(root.line, root.qualname, "Public write entrypoint has no reachable GenLayer consensus call.")
+                for root in index.public_write_functions
+            ),
+        )
     return RuleResult("CONS-01", "MEETS_BASELINE", "Every discovered validator invokes an independently reachable nondeterministic evaluation path.")
 
 
 def evaluate_result(index: AstIndex) -> RuleResult:
     failures: list[Evidence] = []
     count = 0
-    for function in sorted(index.functions.values(), key=lambda item: item.qualname):
+    for function in _reachable_consensus_functions(index):
         for call in function.consensus_calls:
             count += 1
             validator_name = index.resolve_call(function, call.validator_name)
@@ -178,7 +202,7 @@ def evaluate_result(index: AstIndex) -> RuleResult:
 
 def evaluate_bound(index: AstIndex) -> RuleResult:
     failures: list[Evidence] = []
-    for function in sorted(index.functions.values(), key=lambda item: item.qualname):
+    for function in _reachable_consensus_functions(index):
         for write in function.state_writes:
             if not set(write.dependencies) & {"consensus-result", "model-output"}:
                 continue

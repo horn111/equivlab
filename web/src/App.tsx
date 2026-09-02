@@ -29,12 +29,12 @@ import type {
 import AttestationBoundary from './AttestationBoundary'
 import ExactValue from './ExactValue'
 
-const POLICY_ID = 'gl-consensus-baseline-1'
+const POLICY_ID = 'gl-consensus-baseline-2'
 const DEMO_REPOSITORY = import.meta.env.VITE_DEMO_REPOSITORY?.trim() || 'horn111/equivlab'
 const PINNED_COMMIT = import.meta.env.VITE_DEMO_COMMIT?.trim() || 'aef703943cef6a6d9c3f65545072711d78d44417'
 const RULES = [
   ['SRC-01', 'Pinned source identity', 'CRITICAL'],
-  ['CONS-01', 'Independent validator evaluation', 'CRITICAL'],
+  ['CONS-01', 'GenLayer consensus eligibility', 'CRITICAL'],
   ['RESULT-01', 'Fail-closed result handling', 'HIGH'],
   ['BOUND-01', 'Bounded model-derived state', 'HIGH'],
   ['AUTH-01', 'Caller-derived transfer authority', 'CRITICAL'],
@@ -100,7 +100,7 @@ const STATUS_COPY: Record<AuditStatus, string> = {
 
 const RULE_NEXT_CHANGE: Partial<Record<string, string>> = {
   'SRC-01': 'Fetch the commit-pinned source again and bind the report to its canonical digest.',
-  'CONS-01': 'Re-evaluate the claim independently instead of accepting validator-shaped output.',
+  'CONS-01': 'Use a gl.Contract public write entrypoint with a reachable run_nondet_unsafe path, then re-evaluate the claim independently in its validator.',
   'AUTH-01': 'Require caller-derived authorization before any public value-transfer path can execute.',
   'VALUE-01': 'Derive recipient and amount from deterministic, authorized state rather than caller input.',
   'EVID-01': 'Re-observe material evidence inside the validator before accepting the result.',
@@ -272,8 +272,8 @@ function isFinding(value: unknown): value is Finding {
 }
 
 function expectedReportStatus(failed: string[], warnings: string[], unverifiable: string[]): AuditStatus {
-  if (unverifiable.length) return 'UNVERIFIABLE'
   if (failed.length) return 'FAIL'
+  if (unverifiable.length) return 'UNVERIFIABLE'
   if (warnings.length) return 'WARN'
   return 'MEETS_BASELINE'
 }

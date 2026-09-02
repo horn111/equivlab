@@ -47,7 +47,7 @@ const report: AuditReport = {
   failed_rules: ['AUTH-01', 'VALUE-01'],
   findings: [],
   implemented_rules: ['AUTH-01', 'VALUE-01'],
-  policy: 'gl-consensus-baseline-1',
+  policy: 'gl-consensus-baseline-2',
   report_sha256: '6'.repeat(64),
   schema: 'equivlab-report-v1',
   severity: 'CRITICAL',

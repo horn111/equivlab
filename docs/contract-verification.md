@@ -9,6 +9,7 @@ contract. It provides:
 - independent leader and validator source fetches;
 - deterministic AST and bounded call-path findings with no semantic model dependency;
 - fail-closed `UNVERIFIABLE` results for fetch, hash, and parse failure;
+- fail-closed contract-structure and public consensus-path eligibility before `MEETS_BASELINE`;
 - immutable JSON reports with stable `report_sha256`;
 - duplicate prevention, permissionless challenge records, and explicit supersession history;
 - `request_audit`, `get_audit`, `get_report`, `get_latest`, `challenge`, and `count`.
@@ -32,10 +33,10 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 python -m pytest
 ```
 
-Current dependency-free result: `117 passed`; the direct-mode module is skipped
+Current dependency-free result: `122 passed`; the direct-mode module is skipped
 when `genlayer-test` is unavailable.
 
-The genuine GenLayer direct-mode suite contains seven additional tests:
+The genuine GenLayer direct-mode suite contains eight additional tests:
 
 ```powershell
 python -m venv .venv-direct
@@ -49,7 +50,7 @@ Python 3.12.0, and the official GenVM v0.2.16 universal artifact:
 - artifact size: `216630904` bytes;
 - artifact SHA-256: `4f0b358ec98ec148be9b95cdfb0f0e1a6cbe64da0194fdfac3fffc6f5d1d93e2`;
 - archive table read successfully: 25 entries;
-- direct-mode result: `7 passed`;
+- direct-mode result: `8 passed`;
 
 `genlayer-test==0.29.2` retains the SDK's single-contract registration between
 deployments and keeps a duplicated stdin handle open on Windows. The direct test

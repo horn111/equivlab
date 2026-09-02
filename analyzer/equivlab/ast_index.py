@@ -406,18 +406,22 @@ class _FunctionScanner(ast.NodeVisitor):
 
 
 class AstIndex:
-    def __init__(self, tree: ast.Module, functions: dict[str, FunctionInfo]):
+    def __init__(self, tree: ast.Module, functions: dict[str, FunctionInfo], contract_classes: dict[str, int]):
         self.tree = tree
         self.functions = functions
+        self.contract_classes = contract_classes
 
     @classmethod
     def build(cls, source: str) -> "AstIndex":
         tree = ast.parse(source)
         functions: dict[str, FunctionInfo] = {}
+        contract_classes: dict[str, int] = {}
 
         def collect(body: list[ast.stmt], class_name: str | None = None, parent: str | None = None) -> None:
             for node in body:
                 if isinstance(node, ast.ClassDef):
+                    if any(dotted_name(base) == "gl.Contract" for base in node.bases):
+                        contract_classes[node.name] = node.lineno
                     collect(node.body, node.name, parent)
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     if parent:
@@ -474,12 +478,23 @@ class AstIndex:
                     collect(node.body, class_name, qualname)
 
         collect(tree.body)
-        return cls(tree, functions)
+        return cls(tree, functions, contract_classes)
+
+    @property
+    def has_recognizable_contract(self) -> bool:
+        return bool(self.contract_classes) and any(
+            item.class_name in self.contract_classes and item.public_kind in {"write", "payable"}
+            for item in self.functions.values()
+        )
 
     @property
     def public_write_functions(self) -> list[FunctionInfo]:
         return sorted(
-            (item for item in self.functions.values() if item.public_kind in {"write", "payable"}),
+            (
+                item
+                for item in self.functions.values()
+                if item.class_name in self.contract_classes and item.public_kind in {"write", "payable"}
+            ),
             key=lambda item: item.qualname,
         )
 

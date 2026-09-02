@@ -16,9 +16,9 @@ import typing
 from urllib.parse import unquote, urlparse
 
 
-POLICY_VERSION = "gl-consensus-baseline-1"
+POLICY_VERSION = "gl-consensus-baseline-2"
 REPORT_SCHEMA = "equivlab-report-v1"
-OBSERVATION_SCHEMA = "equivlab-consensus-observation-v2"
+OBSERVATION_SCHEMA = "equivlab-consensus-observation-v3"
 STATUSES = ("MEETS_BASELINE", "WARN", "FAIL", "UNVERIFIABLE")
 SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 RULE_IDS = (
@@ -95,6 +95,48 @@ def _render(node: ast.AST | None) -> str:
 def _is_public_write(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     names = [_call_name(item) for item in node.decorator_list]
     return "gl.public.write" in names or "gl.public.write.payable" in names
+
+
+def _contract_classes(tree: ast.Module) -> list[ast.ClassDef]:
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and any(_call_name(base) == "gl.Contract" for base in node.bases)
+    ]
+
+
+def _direct_function_calls(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Call]:
+    calls: list[ast.Call] = []
+
+    def walk(item: ast.AST, root: bool = False) -> None:
+        if not root and isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return
+        if isinstance(item, ast.Call):
+            calls.append(item)
+        for child in ast.iter_child_nodes(item):
+            walk(child)
+
+    walk(node, True)
+    return calls
+
+
+def _method_reaches_consensus(
+    name: str,
+    methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    if name in seen or name not in methods:
+        return False
+    calls = _direct_function_calls(methods[name])
+    if any(_call_name(call.func) == "gl.vm.run_nondet_unsafe" for call in calls):
+        return True
+    next_seen = seen | {name}
+    for call in calls:
+        called = _call_name(call.func)
+        target = called.split(".", 1)[1] if called.startswith("self.") else called
+        if target in methods and _method_reaches_consensus(target, methods, next_seen):
+            return True
+    return False
 
 
 def _nested_functions(node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -335,9 +377,10 @@ def _has_authority_guard(
     return False
 
 
-def _deterministic_findings(source: str, source_url: str) -> list[str]:
+def _deterministic_findings(source: str, source_url: str) -> tuple[list[str], list[str]]:
     tree = ast.parse(source)
     failed: set[str] = set()
+    unverifiable: set[str] = set()
     parsed_url = urlparse(source_url)
     parts = [part for part in parsed_url.path.split("/") if part]
     if (
@@ -350,11 +393,24 @@ def _deterministic_findings(source: str, source_url: str) -> list[str]:
     ):
         failed.add("SRC-01")
 
-    public_functions = [
-        item
-        for item in ast.walk(tree)
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public_write(item)
-    ]
+    contracts = _contract_classes(tree)
+    public_functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    has_consensus_path = False
+    for contract in contracts:
+        methods = {
+            item.name: item
+            for item in contract.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        writes = [item for item in methods.values() if _is_public_write(item)]
+        public_functions.extend(writes)
+        if any(_method_reaches_consensus(item.name, methods) for item in writes):
+            has_consensus_path = True
+
+    if not contracts or not public_functions:
+        return [], sorted(rule for rule in RULE_IDS if rule != "SRC-01")
+    if not has_consensus_path:
+        unverifiable.add("CONS-01")
     for function in public_functions:
         parameters = [arg.arg for arg in function.args.args if arg.arg != "self"]
         parameter_set = set(parameters)
@@ -446,7 +502,7 @@ def _deterministic_findings(source: str, source_url: str) -> list[str]:
                 if not has_terminal_guard or not has_terminal_write:
                     failed.add("REPLAY-01")
 
-    return sorted(failed)
+    return sorted(failed), sorted(unverifiable)
 
 
 def _severity(failed: list[str], warnings: list[str]) -> str:
@@ -511,12 +567,14 @@ def _audit_source(source_url: str, submitted_hash: str) -> dict[str, typing.Any]
         return _unverifiable(source_url, submitted_hash, list(RULE_IDS))
     try:
         ast.parse(source)
-        deterministic_failed = _deterministic_findings(source, source_url)
+        deterministic_failed, deterministic_unverifiable = _deterministic_findings(source, source_url)
     except Exception:
         return _unverifiable(source_url, submitted_hash, [rule for rule in RULE_IDS if rule != "SRC-01"])
 
     if deterministic_failed:
-        return _build_observation(source_url, submitted_hash, "FAIL", deterministic_failed, [], [])
+        return _build_observation(source_url, submitted_hash, "FAIL", deterministic_failed, [], deterministic_unverifiable)
+    if deterministic_unverifiable:
+        return _unverifiable(source_url, submitted_hash, deterministic_unverifiable)
     return _build_observation(source_url, submitted_hash, "MEETS_BASELINE", [], [], [])
 
 
@@ -553,13 +611,14 @@ def _validate_observation(value: typing.Any, source_hash: str, source_url: str) 
         return False
     if set(value["failed_rules"]) & set(value["warning_rules"]):
         return False
-    if value["status"] == "MEETS_BASELINE" and (value["failed_rules"] or value["warning_rules"] or value["unverifiable_rules"]):
-        return False
-    if value["status"] == "WARN" and (value["failed_rules"] or not value["warning_rules"] or value["unverifiable_rules"]):
-        return False
-    if value["status"] == "FAIL" and (not value["failed_rules"] or value["unverifiable_rules"]):
-        return False
-    if value["status"] == "UNVERIFIABLE" and (value["failed_rules"] or value["warning_rules"] or not value["unverifiable_rules"]):
+    expected_status = "MEETS_BASELINE"
+    if value["failed_rules"]:
+        expected_status = "FAIL"
+    elif value["unverifiable_rules"]:
+        expected_status = "UNVERIFIABLE"
+    elif value["warning_rules"]:
+        expected_status = "WARN"
+    if value["status"] != expected_status:
         return False
     if value["severity"] != _severity(value["failed_rules"], value["warning_rules"] + value["unverifiable_rules"]):
         return False

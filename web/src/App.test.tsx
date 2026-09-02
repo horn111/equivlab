@@ -29,16 +29,23 @@ async function makeFailResponse(overrides: Partial<AuditReport> = {}): Promise<A
         status: 'FAIL',
         summary: 'A public transfer path lets caller input control material value-transfer fields.',
       },
+      {
+        evidence: [{ detail: 'Public write entrypoint has no reachable GenLayer consensus call.', line: 20, symbol: 'TipJar.withdraw_to' }],
+        rule: 'CONS-01',
+        severity: 'CRITICAL',
+        status: 'UNVERIFIABLE',
+        summary: 'A GenLayer contract was found, but no run_nondet_unsafe consensus path is reachable from a public write entrypoint.',
+      },
     ],
     implemented_rules: IMPLEMENTED_RULES,
-    policy: 'gl-consensus-baseline-1',
+    policy: 'gl-consensus-baseline-2',
     report_sha256: '0'.repeat(64),
     schema: 'equivlab-report-v1',
     severity: 'CRITICAL',
     scope: 'Twelve deterministic rule cores only.',
     source: { canonical_sha256: await sourceSha256(backdooredTipJar), url: TIP_JAR_URL },
     status: 'FAIL',
-    unverifiable_rules: [],
+    unverifiable_rules: ['CONS-01'],
     warning_rules: [],
   }
   const report: AuditReport = {
@@ -78,7 +85,7 @@ describe('EquivLab workbench', () => {
     await user.click(screen.getByTitle('Inspect CONS-01'))
     const focus = screen.getByRole('status', { name: 'Selected rule' })
     expect(within(focus).getByText('CONS-01')).toBeInTheDocument()
-    expect(within(focus).getByText('Independent validator evaluation')).toBeInTheDocument()
+    expect(within(focus).getByText('GenLayer consensus eligibility')).toBeInTheDocument()
     expect(within(focus).getByText('UNREAD')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Rule spectrum' })).not.toBeInTheDocument()
   })

@@ -1,7 +1,7 @@
 # EquivLab
 
 EquivLab is a deterministic Python source analyzer for the twelve rules in the
-`gl-consensus-baseline-1` policy. It combines AST facts with bounded call-path
+`gl-consensus-baseline-2` policy. It combines AST facts with bounded call-path
 tracing and has no semantic model dependency.
 
 The four possible report statuses are `MEETS_BASELINE`, `WARN`, `FAIL`, and
@@ -10,9 +10,10 @@ meets the implemented rules of the named policy. It is not formal verification
 or a security guarantee.
 
 The exact deterministic acceptance conditions and known limits are documented
-in [`docs/policy-gl-consensus-baseline-1.md`](docs/policy-gl-consensus-baseline-1.md).
-The fixture corpus contains a full `pass.py`/`fail.py` pair for every rule; each
-negative fixture isolates one rule in the complete report.
+in [`docs/policy-gl-consensus-baseline-2.md`](docs/policy-gl-consensus-baseline-2.md).
+The fixture corpus contains a full `pass.py`/`fail.py` pair for every rule. Rule
+evaluators isolate each negative case; complete reports also enforce contract and
+public consensus-path eligibility before `MEETS_BASELINE`.
 
 ## Live deployment
 

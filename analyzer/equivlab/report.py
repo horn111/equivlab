@@ -48,10 +48,10 @@ def _finish_report(report: dict[str, object], results: list[RuleResult]) -> dict
         key=lambda item: str(item["rule"]),
     )
 
-    if unverifiable:
-        status = "UNVERIFIABLE"
-    elif failed:
+    if failed:
         status = "FAIL"
+    elif unverifiable:
+        status = "UNVERIFIABLE"
     elif warnings:
         status = "WARN"
     else:
@@ -108,6 +108,15 @@ def analyze_source(source: bytes | str, source_url: str, expected_sha256: str | 
             parse_evidence = (Evidence(exc.lineno, "<module>", "Python source could not be parsed."),)
         blocked = [
             RuleResult(rule, "UNVERIFIABLE", "Python AST facts are unavailable because source parsing failed.", parse_evidence)
+            for rule in IMPLEMENTED_RULES
+            if rule != "SRC-01"
+        ]
+        return _finish_report(report, [source_result, *blocked])
+
+    if not index.has_recognizable_contract:
+        evidence = (Evidence(1, "<module>", "Expected a class inheriting gl.Contract with at least one @gl.public.write or @gl.public.write.payable entrypoint."),)
+        blocked = [
+            RuleResult(rule, "UNVERIFIABLE", "The audited file is not a recognizable GenLayer write contract.", evidence)
             for rule in IMPLEMENTED_RULES
             if rule != "SRC-01"
         ]

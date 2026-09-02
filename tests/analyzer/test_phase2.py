@@ -88,10 +88,23 @@ def test_rule_pair_reports_isolate_the_intended_failure(rule: str) -> None:
     passed = analyze_source(passed_source, passed_url, canonical_sha256(passed_source))
     failed = analyze_source(failed_source, failed_url, canonical_sha256(failed_source))
 
-    assert passed["status"] == "MEETS_BASELINE"
+    if passed["unverifiable_rules"]:
+        assert passed["status"] == "UNVERIFIABLE"
+        passed_index = AstIndex.build(passed_source.decode("utf-8"))
+        expected_unverifiable = ["CONS-01"] if passed_index.has_recognizable_contract else [
+            rule_id for rule_id in sorted(IMPLEMENTED_RULES) if rule_id != "SRC-01"
+        ]
+        assert passed["unverifiable_rules"] == expected_unverifiable
+    else:
+        assert passed["status"] == "MEETS_BASELINE"
     assert passed["failed_rules"] == []
-    assert failed["status"] == "FAIL"
-    assert failed["failed_rules"] == [RULE_IDS[rule]]
+    failed_index = AstIndex.build(failed_source.decode("utf-8"))
+    if not failed_index.has_recognizable_contract and rule != "src_01":
+        assert failed["status"] == "UNVERIFIABLE"
+        assert failed["failed_rules"] == []
+    else:
+        assert failed["status"] == "FAIL"
+        assert failed["failed_rules"] == [RULE_IDS[rule]]
 
 
 def test_existing_final_blank_lines_remain_hash_significant() -> None:

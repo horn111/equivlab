@@ -38,7 +38,7 @@ _sdk_loader.CACHE_DIR = ROOT / ".gltest-cache"
 CONTRACT_PATH = "contracts/consensus_safety_registry.py"
 RUNTIME = "v0.2.16"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-POLICY = "gl-consensus-baseline-1"
+POLICY = "gl-consensus-baseline-2"
 
 
 def canonical_source(source: str) -> str:
@@ -89,7 +89,9 @@ def test_direct_demo_statuses(direct_vm, direct_deploy):
     backdoor = fixture_source("backdoored_tip_jar")
     install_source(direct_vm, "backdoored_tip_jar", backdoor)
     backdoor_id = request(contract, "backdoored_tip_jar", backdoor)
-    assert json.loads(contract.get_report(backdoor_id))["failed_rules"] == ["AUTH-01", "VALUE-01"]
+    backdoor_report = json.loads(contract.get_report(backdoor_id))
+    assert backdoor_report["failed_rules"] == ["AUTH-01", "VALUE-01"]
+    assert backdoor_report["unverifiable_rules"] == ["CONS-01"]
 
     schema_only = fixture_source("schema_only_fact_checker")
     install_source(direct_vm, "schema_only_fact_checker", schema_only)
@@ -132,6 +134,29 @@ def test_direct_hash_mismatch_is_unverifiable(direct_vm, direct_deploy):
     assert json.loads(contract.get_report(audit_id))["status"] == "UNVERIFIABLE"
 
 
+def test_direct_non_contract_and_no_consensus_contract_are_unverifiable(direct_vm, direct_deploy):
+    contract = deploy_registry(direct_deploy)
+    plain = "def helper():\n    return 1\n"
+    install_source(direct_vm, "plain_python", plain)
+    plain_id = request(contract, "plain_python", plain)
+    plain_report = json.loads(contract.get_report(plain_id))
+    assert plain_report["status"] == "UNVERIFIABLE"
+    assert "CONS-01" in plain_report["unverifiable_rules"]
+
+    storage = '''from genlayer import *
+class Storage(gl.Contract):
+    value: int
+    @gl.public.write
+    def set_value(self, value: int):
+        self.value = value
+'''
+    install_source(direct_vm, "storage", storage)
+    storage_id = request(contract, "storage", storage)
+    storage_report = json.loads(contract.get_report(storage_id))
+    assert storage_report["status"] == "UNVERIFIABLE"
+    assert storage_report["unverifiable_rules"] == ["CONS-01"]
+
+
 def test_direct_full_source_identity_keeps_mirrors_independent(direct_vm, direct_deploy):
     contract = deploy_registry(direct_deploy)
     source = fixture_source("hardened_fact_checker")
@@ -163,6 +188,7 @@ class Vault(gl.Contract):
     stored = json.loads(contract.get_report(audit_id))
     assert stored["status"] == "FAIL"
     assert stored["failed_rules"] == ["AUTH-01", "VALUE-01"]
+    assert stored["unverifiable_rules"] == ["CONS-01"]
 
 
 def test_direct_duplicate_challenge_and_supersession(direct_vm, direct_deploy):

@@ -44,10 +44,10 @@ def report_for(name: str) -> dict[str, object]:
 
 
 def test_policy_declares_all_deterministic_rules_as_implemented() -> None:
-    policy = json.loads((ROOT / "policies" / "gl-consensus-baseline-1.json").read_text(encoding="utf-8"))
+    policy = json.loads((ROOT / "policies" / "gl-consensus-baseline-2.json").read_text(encoding="utf-8"))
     implemented = sorted(rule["id"] for rule in policy["rules"] if rule["implemented"])
     assert implemented == ALL_RULES
-    assert policy["status_meanings"]["MEETS_BASELINE"].startswith("The supplied revision meets")
+    assert "public consensus path" in policy["status_meanings"]["MEETS_BASELINE"]
 
 
 def test_canonicalization_normalizes_bom_crlf_and_final_lf() -> None:
@@ -74,8 +74,8 @@ def test_backdoored_tip_jar_fails_auth_and_value_acceptance_criterion() -> None:
     assert report["status"] == "FAIL"
     assert report["severity"] == "CRITICAL"
     assert report["failed_rules"] == ["AUTH-01", "VALUE-01"]
-    assert report["unverifiable_rules"] == []
-    assert [finding["rule"] for finding in report["findings"]] == ["AUTH-01", "VALUE-01"]
+    assert report["unverifiable_rules"] == ["CONS-01"]
+    assert [finding["rule"] for finding in report["findings"]] == ["AUTH-01", "CONS-01", "VALUE-01"]
 
 
 def test_schema_only_validator_fails_consensus_independence() -> None:
@@ -117,6 +117,47 @@ def test_malformed_python_is_unverifiable_for_ast_rules() -> None:
     assert report["unverifiable_rules"] == [rule for rule in ALL_RULES if rule != "SRC-01"]
 
 
+def test_plain_python_file_is_explicitly_unverifiable_as_a_non_contract() -> None:
+    source = b"def helper():\n    return 1\n"
+    report = analyze_source(source, pinned_url("plain_python"), canonical_sha256(source))
+    assert report["status"] == "UNVERIFIABLE"
+    assert report["failed_rules"] == []
+    assert report["unverifiable_rules"] == [rule for rule in ALL_RULES if rule != "SRC-01"]
+    finding = next(item for item in report["findings"] if item["rule"] == "CONS-01")
+    assert finding["summary"] == "The audited file is not a recognizable GenLayer write contract."
+
+
+def test_genlayer_contract_without_public_consensus_path_is_unverifiable() -> None:
+    source = b"""
+from genlayer import *
+class Storage(gl.Contract):
+    value: int
+    @gl.public.write
+    def set_value(self, value: int):
+        self.value = value
+"""
+    report = analyze_source(source, pinned_url("storage"), canonical_sha256(source))
+    assert report["status"] == "UNVERIFIABLE"
+    assert report["unverifiable_rules"] == ["CONS-01"]
+    finding = next(item for item in report["findings"] if item["rule"] == "CONS-01")
+    assert "no run_nondet_unsafe consensus path is reachable" in finding["summary"]
+
+
+def test_dead_consensus_helper_does_not_make_contract_verifiable() -> None:
+    source = b"""
+from genlayer import *
+class Probe(gl.Contract):
+    @gl.public.write
+    def check(self):
+        return 1
+    def dead_path(self):
+        gl.vm.run_nondet_unsafe(lambda: 1, lambda result: True)
+"""
+    report = analyze_source(source, pinned_url("dead_path"), canonical_sha256(source))
+    assert report["status"] == "UNVERIFIABLE"
+    assert report["unverifiable_rules"] == ["CONS-01"]
+
+
 def test_authority_guard_propagates_into_transfer_helper() -> None:
     source = b"""
 from genlayer import *
@@ -137,7 +178,8 @@ class Vault(gl.Contract):
     assert len(paths) == 1
     assert paths[0].guarded is True
     report = analyze_source(source, pinned_url("vault"), canonical_sha256(source))
-    assert report["status"] == "MEETS_BASELINE"
+    assert report["status"] == "UNVERIFIABLE"
+    assert report["unverifiable_rules"] == ["CONS-01"]
 
 
 def test_report_json_and_hash_are_stable() -> None:
