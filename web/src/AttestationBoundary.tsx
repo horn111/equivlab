@@ -372,10 +372,10 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
     <section className={`attestation-boundary ${config ? 'attestation-configured' : 'attestation-unconfigured'}`} aria-labelledby="attestation-title">
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
       <div className="attestation-copy">
-        <h2 id="attestation-title">Registry boundary</h2>
+        <h2 id="attestation-title" tabIndex={-1}>GenLayer review</h2>
         <p>{config
-          ? 'A wallet-signed request is authoritative only after finalization and a source-matched registry readback.'
-          : 'Attestation stays unavailable until a supported network and deployed registry address are configured.'}</p>
+          ? 'Request an on-chain audit of the pinned source. GenLayer validators reproduce the checks; the result is authoritative only after finalization and a matching registry readback.'
+          : 'GenLayer review stays unavailable until a supported network and deployed registry address are configured.'}</p>
       </div>
 
       <dl className="network-readout">
@@ -389,13 +389,13 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
         {config && !account && (
           <button className="secondary-action" onClick={connectWallet} disabled={busy}>
             {stage === 'connecting' ? <SpinnerGapIcon className="spin" /> : <WalletIcon />}
-            {stage === 'connecting' ? 'Authorizing wallet' : 'Connect wallet'}
+            {stage === 'connecting' ? 'Authorizing wallet' : readback ? 'Connect wallet to challenge' : 'Connect wallet'}
           </button>
         )}
         {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
           <button className="primary-action" onClick={requestAttestation} disabled={busy}>
             {stage === 'signing' ? <SpinnerGapIcon className="spin" /> : <SealCheckIcon />}
-            {stage === 'signing' ? 'Awaiting signature' : 'Request attestation'}
+            {stage === 'signing' ? 'Awaiting signature' : 'Request GenLayer review'}
           </button>
         )}
         {config && transactionHash && stage !== 'complete' && (
@@ -406,15 +406,40 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
         )}
       </div>
 
-      {config && account && sourceMode !== 'retrieved' && (
+      {config && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
+        <div className="review-instructions">
+          <strong>Start a new GenLayer review</strong>
+          <ol>
+            <li>Connect Rabby or MetaMask on desktop with GEN on Bradbury testnet.</li>
+            <li>Select <b>Request GenLayer review</b> and confirm the transaction in your wallet. Network fees apply.</li>
+            <li>Follow consensus and finalization here, then inspect the source-matched registry result.</li>
+          </ol>
+          <p>Connecting your wallet does not send a transaction.</p>
+        </div>
+      )}
+
+      {config && sourceMode !== 'retrieved' && (
         <div className="registry-guidance" role="status">
           <div>
             <strong>Pinned source required</strong>
-            <p>This report used submitted editor bytes. Retrieve and reproduce the exact commit-pinned source before requesting an attestation.</p>
+            <p>This report used submitted editor bytes. Retrieve and reproduce the exact commit-pinned source before requesting a GenLayer review. You do not need to connect a wallet for this step.</p>
           </div>
           <button className="secondary-action" type="button" onClick={onUsePinnedSource} disabled={analysisLoading}>
             {analysisLoading ? <SpinnerGapIcon className="spin" /> : <ArrowClockwiseIcon />}
             {analysisLoading ? 'Retrieving source' : 'Retrieve pinned source'}
+          </button>
+        </div>
+      )}
+
+      {readback && (
+        <div className="registry-guidance">
+          <div>
+            <strong>This revision already has a GenLayer review</strong>
+            <p>Audit {readback.audit.id} covers this exact source URL, hash, and policy. No new transaction is needed to read it below. Duplicate requests are not accepted.</p>
+            <p>To trigger a new review, use your own public contract or a new full commit, analyze its pinned source, then connect your wallet and select Request GenLayer review.</p>
+          </div>
+          <button className="secondary-action" type="button" onClick={onEditSourceRevision}>
+            <GitCommitIcon /> Analyze a new revision
           </button>
         </div>
       )}
@@ -464,17 +489,6 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
             <div><dt>REQUESTER</dt><dd><ExactValue label="Requester address" value={readback.audit.requester} onStatus={setAnnouncement} /></dd></div>
             <div><dt>CHALLENGED</dt><dd>{readback.audit.challenged ? 'YES' : 'NO'}</dd></div>
           </dl>
-          {readbackAuthority !== 'finalized' && (
-            <div className="registry-guidance registry-guidance-readback">
-              <div>
-                <strong>This revision already has a registry record</strong>
-                <p>Audit {readback.audit.id} covers this exact source URL, hash, and policy. Duplicate audit requests are not accepted.</p>
-              </div>
-              <button className="secondary-action" type="button" onClick={onEditSourceRevision}>
-                <GitCommitIcon /> Analyze a new revision
-              </button>
-            </div>
-          )}
           {account && (
             <details className="challenge-disclosure">
               <summary>Challenge this registry record</summary>

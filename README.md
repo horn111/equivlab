@@ -56,6 +56,24 @@ extensions are supported; EquivLab adds or switches the wallet to Bradbury befor
 each write. Embedded browsers and mobile browsers without an injected provider
 can still run local analysis and read registry records, but cannot sign a request.
 
+### Request a GenLayer review
+
+1. Enter a public GitHub repository, full 40-character commit, and contract path.
+   For your own contract, expand **Review contract source** and paste the exact
+   source to calculate its expected hash. Leave **Analyze editor preview instead**
+   unchecked.
+2. Select **Analyze revision**, then **Go to GenLayer review** in the local result.
+   Local analysis does not send a transaction.
+3. If no record exists, connect Rabby or MetaMask with Bradbury testnet GEN,
+   select **Request GenLayer review**, and confirm the transaction. Network fees
+   apply. Follow consensus, finalization, and the source-matched readback on the page.
+
+The published demo revisions already have registry records. You can read those
+without a wallet, but cannot submit duplicate requests for the same source URL,
+hash, and policy. Select **Analyze a new revision** and use a different full
+commit or your own public contract to trigger a new review. If the source changes,
+update the source editor as well so its expected hash matches the pinned file.
+
 Run the local analyzer API and Vite app in separate terminals:
 
 ```powershell

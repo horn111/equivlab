@@ -909,6 +909,7 @@ export default function App() {
   }
 
   const editSourceRevision = () => {
+    setSourceOpen(true)
     setLiveMessage('Edit the full commit or another source identity field, then analyze the new revision.')
     focusSourceControl(commitInputRef.current)
     commitInputRef.current?.select()
@@ -1004,7 +1005,7 @@ export default function App() {
             <div className="panel-heading">
               <div>
                 <h1 id="source-title">Pin the exact contract revision</h1>
-                <p>Establish source identity before interpreting any rule result.</p>
+                <p>First run a local source analysis. Then request a GenLayer review with your wallet, or inspect an existing registry record.</p>
               </div>
             </div>
 
@@ -1061,6 +1062,7 @@ export default function App() {
                 <span>{sourceOpen ? 'Hide contract source' : 'Review contract source'}</span>
                 <code>{identity.path.split('/').at(-1) ?? 'contract.py'}</code>
               </summary>
+              <p className="source-editor-help">For your own contract, paste the source from that exact commit here to calculate its expected hash. Keep editor-preview mode off to verify it against GitHub.</p>
               <textarea
                 aria-label="Contract source preview"
                 value={identity.source}
@@ -1087,6 +1089,19 @@ export default function App() {
             tabIndex={-1}
             aria-label={`Local analysis result: ${report.status}`}
           >
+            <div className="review-next-step">
+              <div>
+                <strong>Local analysis complete</strong>
+                <p>This analysis did not send a transaction. Continue to GenLayer to request a review or check an existing record.</p>
+              </div>
+              <button className="secondary-action" onClick={() => {
+                const heading = document.getElementById('attestation-title')
+                heading?.scrollIntoView({ block: 'start' })
+                heading?.focus({ preventScroll: true })
+              }}>
+                Go to GenLayer review <ArrowRightIcon aria-hidden="true" />
+              </button>
+            </div>
             <RuleSpectrum report={report} activeRule={activeRule} onSelect={selectRule} loading={loading} />
             <section className="finding-panel" ref={findingPanelRef} aria-label="Selected rule evidence">
               <FindingReadout finding={activeFinding} activeRule={activeRule} report={report} />

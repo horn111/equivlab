@@ -99,7 +99,8 @@ describe('attestation lifecycle', () => {
       expect.objectContaining({ network: 'testnetBradbury' }),
       window.ethereum,
     )
-    await user.click(await screen.findByRole('button', { name: /request attestation/i }))
+    expect(mocks.writeContract).not.toHaveBeenCalled()
+    await user.click(await screen.findByRole('button', { name: /request genlayer review/i }))
 
     expect(await screen.findByRole('region', { name: /authoritative registry readback/i })).toBeInTheDocument()
     expect(screen.getByText('7')).toBeInTheDocument()
@@ -129,7 +130,12 @@ describe('attestation lifecycle', () => {
     expect(await screen.findByRole('region', { name: /existing registry readback/i })).toBeInTheDocument()
     expect(screen.getByText(/already registered/i)).toBeInTheDocument()
     expect(screen.getAllByText(/finalization was not independently checked/i).length).toBeGreaterThan(0)
-    expect(screen.queryByRole('button', { name: /request attestation/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request genlayer review/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/to trigger a new review/i)).toBeInTheDocument()
+    window.ethereum = { request: vi.fn().mockResolvedValue([ADDRESS]) }
+    await user.click(screen.getByRole('button', { name: /connect wallet to challenge/i }))
+    expect(screen.queryByRole('button', { name: /request genlayer review/i })).not.toBeInTheDocument()
+    expect(mocks.writeContract).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: /analyze a new revision/i }))
     expect(onEditSourceRevision).toHaveBeenCalledOnce()
     expect(mocks.readLatestRegistryAudit).toHaveBeenCalledWith(
@@ -154,7 +160,7 @@ describe('attestation lifecycle', () => {
     render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     await user.click(screen.getByRole('button', { name: /connect wallet/i }))
     await user.type(await screen.findByLabelText(/supersedes audit id/i), '3')
-    await user.click(screen.getByRole('button', { name: /request attestation/i }))
+    await user.click(screen.getByRole('button', { name: /request genlayer review/i }))
 
     expect(mocks.writeContract).toHaveBeenCalledWith({
       address: REGISTRY,
@@ -168,6 +174,8 @@ describe('attestation lifecycle', () => {
     mocks.readLatestRegistryAudit.mockResolvedValue(null)
     const { unmount } = render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     expect(await screen.findByText(/no existing audit for this exact source identity/i)).toBeInTheDocument()
+    expect(screen.getByText('Start a new GenLayer review')).toBeInTheDocument()
+    expect(screen.getByText(/connect rabby or metamask/i)).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
     unmount()
@@ -175,6 +183,8 @@ describe('attestation lifecycle', () => {
     render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
     expect(await screen.findByRole('alert')).toHaveTextContent(/registry lookup failed: rpc unavailable/i)
     expect(screen.getByRole('button', { name: /retry registry lookup/i })).toBeInTheDocument()
+    expect(screen.queryByText('Start a new GenLayer review')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request genlayer review/i })).not.toBeInTheDocument()
   })
 
   it('turns a submitted preview into an actionable pinned-source recovery step', async () => {
@@ -182,10 +192,11 @@ describe('attestation lifecycle', () => {
     window.ethereum = { request: vi.fn().mockResolvedValue([ADDRESS]) }
 
     render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="submitted" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
-    await user.click(screen.getByRole('button', { name: /connect wallet/i }))
-
     expect(screen.getByText(/this report used submitted editor bytes/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request genlayer review/i })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /retrieve pinned source/i }))
     expect(onUsePinnedSource).toHaveBeenCalledOnce()
+    expect(window.ethereum.request).not.toHaveBeenCalled()
+    expect(mocks.writeContract).not.toHaveBeenCalled()
   })
 })
