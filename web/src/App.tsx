@@ -52,6 +52,7 @@ const RULE_ID_SET = new Set<string>(RULE_IDS)
 const IMPLEMENTED_RULE_IDS = [...RULE_IDS].sort()
 const RULE_SEVERITY = new Map<string, string>(RULES.map(([rule, , severity]) => [rule, severity]))
 const SEVERITY_ORDER = new Map([['LOW', 0], ['MEDIUM', 1], ['HIGH', 2], ['CRITICAL', 3]])
+const MAX_SOURCE_BYTES = 100_000
 
 const FIXTURES: FixtureDefinition[] = [
   {
@@ -154,6 +155,61 @@ export function pinnedSourceUrl(identity: Pick<SourceIdentity, 'repository' | 'c
   const repository = identity.repository.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
   const path = identity.path.trim().replace(/^\/+/, '')
   return `https://raw.githubusercontent.com/${repository}/${identity.commit.trim()}/${path}`
+}
+
+async function fetchPinnedSource(identity: SourceIdentity, signal: AbortSignal): Promise<string> {
+  const url = pinnedSourceUrl(identity)
+  if (!/^https:\/\/raw\.githubusercontent\.com\/[^/?#]+\/[^/?#]+\/[0-9a-f]{40}\/.+/.test(url)
+    || url.length > 1_000
+    || /[%?#\\]/.test(url)
+    || url.split('/').slice(3).some((part) => !part || part === '.' || part === '..')) {
+    throw new Error('Enter a public owner/repository, lowercase 40-character commit, and contract file path.')
+  }
+
+  let response: Response
+  try {
+    response = await fetch(url, { cache: 'no-store', redirect: 'error', signal })
+  } catch (error) {
+    if (signal.aborted) throw error
+    throw new Error('Pinned GitHub source could not be retrieved in this browser. Check network access and retry.')
+  }
+  if (!response.ok) throw new Error(`Pinned GitHub source could not be retrieved (HTTP ${response.status}). Check the repository, commit, and path.`)
+  const contentLength = Number(response.headers.get('content-length'))
+  if (contentLength > MAX_SOURCE_BYTES) throw new Error('Pinned source exceeds the 100 KB policy limit.')
+  let bytes: Uint8Array
+  if (response.body) {
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        total += value.byteLength
+        if (total > MAX_SOURCE_BYTES) {
+          await reader.cancel()
+          throw new Error('Pinned source exceeds the 100 KB policy limit.')
+        }
+        chunks.push(value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    bytes = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+  } else {
+    bytes = new Uint8Array(await response.arrayBuffer())
+    if (bytes.byteLength > MAX_SOURCE_BYTES) throw new Error('Pinned source exceeds the 100 KB policy limit.')
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    throw new Error('Pinned source is not valid UTF-8 text.')
+  }
 }
 
 function fixtureById(id: FixtureId): FixtureDefinition {
@@ -495,14 +551,15 @@ function FixtureStrip({
   selected,
   onSelect,
 }: {
-  selected: FixtureId
+  selected: FixtureId | null
   onSelect: (id: FixtureId) => void
 }) {
   return (
     <>
       <label className="fixture-picker">
         <span>Reference fixture</span>
-        <select value={selected} onChange={(event) => onSelect(event.target.value as FixtureId)}>
+        <select value={selected ?? ''} onChange={(event) => onSelect(event.target.value as FixtureId)}>
+          <option value="" disabled>Custom revision</option>
           {FIXTURES.map((fixture) => <option key={fixture.id} value={fixture.id}>{fixture.label}</option>)}
         </select>
       </label>
@@ -787,8 +844,11 @@ export default function App() {
   const focusResultAfterAnalysis = useRef(false)
   const selectedFixture = fixtureById(fixtureId)
   const sourceUrl = pinnedSourceUrl(identity)
+  const isReferenceFixture = identity.repository.trim() === DEMO_REPOSITORY
+    && identity.commit.trim() === PINNED_COMMIT
+    && identity.path.trim() === selectedFixture.path
+  const analyzeUnavailable = loading || (!sourceDigest && (usePreview || (isReferenceFixture && !!identity.source)))
   const activeFinding = report?.findings.find((finding) => finding.rule === activeRule) ?? null
-  const expectedDigest = fixtureId === 'unverifiable' ? '0'.repeat(64) : sourceDigest
 
   const selectRule = useCallback((rule: string) => {
     setActiveRule(rule)
@@ -802,6 +862,10 @@ export default function App() {
   }, [report])
 
   useEffect(() => {
+    if (!identity.source) {
+      setSourceDigest(null)
+      return
+    }
     let alive = true
     const timer = window.setTimeout(() => {
       sourceSha256(identity.source).then((hash) => {
@@ -815,7 +879,7 @@ export default function App() {
       alive = false
       window.clearTimeout(timer)
     }
-  }, [identity.source])
+  }, [identity.repository, identity.commit, identity.path, identity.source])
 
   useEffect(() => {
     if (!report || !focusResultAfterAnalysis.current) return
@@ -829,19 +893,34 @@ export default function App() {
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}${window.location.hash}`)
   }, [fixtureId])
 
-  const runAnalysis = useCallback(async (previewMode: boolean) => {
-    if (!sourceDigest || !expectedDigest) return
+  const runAnalysis = useCallback(async (previewMode: boolean, forceFetch = false) => {
     controller.current?.abort()
-    controller.current = new AbortController()
+    const requestController = new AbortController()
+    controller.current = requestController
     setLoading(true)
     setError(null)
-    setLiveMessage('Analyzing the exact source revision.')
+    setLiveMessage(previewMode ? 'Analyzing editor preview.' : 'Retrieving the exact commit-pinned source.')
     focusResultAfterAnalysis.current = true
     try {
-      const response = await analyzeRevision(sourceUrl, expectedDigest, previewMode ? identity.source : undefined, controller.current.signal)
-      if (!await isReproducedResponse(identity, sourceDigest, response)) {
+      let analyzedIdentity = identity
+      let digest = sourceDigest
+      if (!previewMode && (!isReferenceFixture || !digest || forceFetch)) {
+        const source = await fetchPinnedSource(identity, requestController.signal)
+        digest = await sourceSha256(source)
+        if (requestController.signal.aborted) return
+        analyzedIdentity = { ...identity, source }
+        setIdentity(analyzedIdentity)
+        setSourceDigest(digest)
+      }
+      if (!digest) digest = await sourceSha256(identity.source)
+      if (requestController.signal.aborted) return
+      const expectedDigest = isReferenceFixture && fixtureId === 'unverifiable' ? '0'.repeat(64) : digest
+      setLiveMessage('Analyzing the exact source revision.')
+      const response = await analyzeRevision(sourceUrl, expectedDigest, previewMode ? analyzedIdentity.source : undefined, requestController.signal)
+      if (!await isReproducedResponse(analyzedIdentity, digest, response)) {
         throw new Error('The analyzer response could not be reproduced against this source revision and policy.')
       }
+      if (requestController.signal.aborted) return
       setReport(response.report)
       setSourceMode(response.source_mode)
       setSourceOpen(false)
@@ -850,8 +929,8 @@ export default function App() {
       const record: HistoryRecord = {
         id: `${Date.now()}-${response.report.report_sha256}`,
         createdAt: new Date().toISOString(),
-        identity: { ...identity },
-        label: selectedFixture.label,
+        identity: { ...analyzedIdentity },
+        label: isReferenceFixture ? selectedFixture.label : `${identity.repository} · ${identity.path}`,
         provenance: 'reproduced',
         report: response.report,
         sourceMode: response.source_mode,
@@ -871,22 +950,24 @@ export default function App() {
       setSourceMode(null)
       focusResultAfterAnalysis.current = false
     } finally {
-      setLoading(false)
+      if (controller.current === requestController) setLoading(false)
     }
-  }, [expectedDigest, identity, selectedFixture.label, sourceDigest, sourceUrl])
+  }, [fixtureId, identity, isReferenceFixture, selectedFixture.label, sourceDigest, sourceUrl])
 
-  const updateIdentity = (next: SourceIdentity) => {
+  const updateIdentity = (next: SourceIdentity, coordinatesChanged = false) => {
     controller.current?.abort()
     setSourceDigest(null)
-    setLiveMessage('Source changed. Recomputing the canonical hash; the previous report was cleared.')
-    setIdentity(next)
+    setLiveMessage(coordinatesChanged
+      ? 'Source identity changed. Analyze revision to retrieve the exact pinned file.'
+      : 'Source changed. Recomputing the canonical hash; the previous report was cleared.')
+    setIdentity(coordinatesChanged ? { ...next, source: '' } : next)
     setReport(null)
     setSourceMode(null)
     setError(null)
     setCopied(false)
     setShareError(null)
     setSnapshotNotice(null)
-    setSourceOpen(true)
+    setSourceOpen(!coordinatesChanged)
   }
 
   const selectFixture = (id: FixtureId) => {
@@ -905,7 +986,7 @@ export default function App() {
     setUsePreview(false)
     setSourceOpen(false)
     setLiveMessage('Fetching and reproducing the commit-pinned source. The connected wallet remains available.')
-    void runAnalysis(false)
+    void runAnalysis(false, true)
   }
 
   const editSourceRevision = () => {
@@ -964,7 +1045,7 @@ export default function App() {
       {report && <a className="skip-link skip-results" href="#spectrum-title">Skip to report</a>}
       <PolicyRail activeRule={activeRule} onSelect={selectRule} />
       <main onKeyDown={(event) => {
-        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !loading && sourceDigest) {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !analyzeUnavailable) {
           event.preventDefault()
           void runAnalysis(usePreview)
         }
@@ -976,7 +1057,7 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             <span className="policy-chip">{POLICY_ID}</span>
-            <button className={`${report ? 'secondary-action' : 'primary-action'} mobile-analyze-action`} onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
+            <button className={`${report ? 'secondary-action' : 'primary-action'} mobile-analyze-action`} onClick={() => void runAnalysis(usePreview)} disabled={analyzeUnavailable}>
               {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
               {loading ? 'Analyzing' : report ? 'Reproduce analysis' : 'Analyze'}
             </button>
@@ -987,7 +1068,7 @@ export default function App() {
           </div>
         </header>
 
-        <FixtureStrip selected={fixtureId} onSelect={selectFixture} />
+        <FixtureStrip selected={isReferenceFixture ? fixtureId : null} onSelect={selectFixture} />
 
         {snapshotNotice && (
           <div className="snapshot-notice" role="status">
@@ -1012,28 +1093,30 @@ export default function App() {
             <div className="source-fields">
               <label>
                 <span><GithubLogoIcon /> Repository</span>
-                <input value={identity.repository} onChange={(event) => updateIdentity({ ...identity, repository: event.target.value })} spellCheck="false" />
+                <input value={identity.repository} onChange={(event) => updateIdentity({ ...identity, repository: event.target.value }, true)} spellCheck="false" />
               </label>
               <label>
                 <span><GitCommitIcon /> Full commit</span>
-                <input ref={commitInputRef} value={identity.commit} onChange={(event) => updateIdentity({ ...identity, commit: event.target.value })} spellCheck="false" />
+                <input ref={commitInputRef} value={identity.commit} onChange={(event) => updateIdentity({ ...identity, commit: event.target.value }, true)} spellCheck="false" />
               </label>
               <label className="path-field">
                 <span><CodeIcon /> Contract path</span>
-                <input value={identity.path} onChange={(event) => updateIdentity({ ...identity, path: event.target.value })} spellCheck="false" />
+                <input value={identity.path} onChange={(event) => updateIdentity({ ...identity, path: event.target.value }, true)} spellCheck="false" />
               </label>
             </div>
 
             <div className="identity-readout">
               <div><span>PINNED RAW URL</span><ExactValue label="Pinned raw URL" value={sourceUrl} onStatus={setLiveMessage} /></div>
-              <div><span>CANONICAL SHA-256</span><ExactValue label="Canonical SHA-256" value={sourceDigest || 'computing'} onStatus={setLiveMessage} /></div>
+              <div><span>CANONICAL SHA-256</span>{sourceDigest
+                ? <ExactValue label="Canonical SHA-256" value={sourceDigest} onStatus={setLiveMessage} />
+                : <code>{identity.source ? 'computing' : 'calculated on analysis'}</code>}</div>
             </div>
 
             <div className={`source-authority ${usePreview ? 'source-authority-preview' : 'source-authority-pinned'}`} role="status">
               <div><span>SOURCE PROVENANCE</span><strong>{usePreview ? 'Local preview only' : 'Retrieve pinned revision'}</strong></div>
               <p>{usePreview
                 ? 'Submitted editor bytes; SRC-01 remains UNVERIFIABLE and registry submission stays disabled.'
-                : 'Recommended: fetch the exact commit-pinned URL and verify its canonical digest.'}</p>
+                : 'Analyze revision retrieves the exact commit-pinned file, computes its digest, and verifies it against the analyzer result.'}</p>
               <label className="source-mode-toggle">
                 <input type="checkbox" checked={usePreview} onChange={(event) => {
                   setUsePreview(event.target.checked)
@@ -1048,9 +1131,11 @@ export default function App() {
             <div className="identity-action-row">
               <div className="fixture-note">
                 <ShieldWarningIcon aria-hidden="true" />
-                <p><strong>{selectedFixture.label}</strong>{selectedFixture.note}</p>
+                <p>{isReferenceFixture
+                  ? <><strong>{selectedFixture.label}</strong>{selectedFixture.note}</>
+                  : <><strong>Custom revision</strong>The source preview loads from GitHub when you analyze this exact commit.</>}</p>
               </div>
-              <button ref={analyzeActionRef} className={`${report ? 'secondary-action' : 'primary-action'} analyze-action`} onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
+              <button ref={analyzeActionRef} className={`${report ? 'secondary-action' : 'primary-action'} analyze-action`} onClick={() => void runAnalysis(usePreview)} disabled={analyzeUnavailable}>
                 {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
                 {loading ? 'Analyzing revision' : report ? 'Reproduce analysis' : 'Analyze revision'}
                 {!loading && <ArrowRightIcon />}
@@ -1062,11 +1147,12 @@ export default function App() {
                 <span>{sourceOpen ? 'Hide contract source' : 'Review contract source'}</span>
                 <code>{identity.path.split('/').at(-1) ?? 'contract.py'}</code>
               </summary>
-              <p className="source-editor-help">For your own contract, paste the source from that exact commit here to calculate its expected hash. Keep editor-preview mode off to verify it against GitHub.</p>
+              <p className="source-editor-help">Pinned mode retrieves the file from GitHub when you analyze. Paste source here only to inspect an editor preview; preview results cannot be submitted for GenLayer review.</p>
               <textarea
                 aria-label="Contract source preview"
                 value={identity.source}
                 onChange={(event) => updateIdentity({ ...identity, source: event.target.value })}
+                placeholder="Pinned source will appear here after analysis."
                 spellCheck="false"
                 rows={15}
               />

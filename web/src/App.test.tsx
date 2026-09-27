@@ -10,6 +10,8 @@ const IMPLEMENTED_RULES = [
   'RESULT-01', 'SRC-01', 'STATE-01', 'TIME-01', 'URL-01', 'VALUE-01',
 ]
 const TIP_JAR_URL = 'https://raw.githubusercontent.com/horn111/equivlab/aef703943cef6a6d9c3f65545072711d78d44417/fixtures/backdoored_tip_jar/contract.py'
+const EXTERNAL_COMMIT = 'b117c4d9eb040fd7f1603ddce090a97edeea98f9'
+const EXTERNAL_URL = `https://raw.githubusercontent.com/Siriron/genlayer-intelligent-contracts/${EXTERNAL_COMMIT}/contracts/updated/package_linker.py`
 
 async function makeFailResponse(
   overrides: Partial<AuditReport> = {},
@@ -158,8 +160,10 @@ describe('EquivLab workbench', () => {
     const user = userEvent.setup()
     const submitted = await makeFailResponse({}, 'submitted')
     const retrieved = await makeFailResponse({}, 'retrieved')
+    const sourceBytes = new TextEncoder().encode(backdooredTipJar)
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => submitted })
+      .mockResolvedValueOnce({ ok: true, headers: { get: () => String(sourceBytes.byteLength) }, arrayBuffer: async () => sourceBytes.buffer })
       .mockResolvedValueOnce({ ok: true, json: async () => retrieved })
     vi.stubGlobal('fetch', fetchMock)
     vi.stubEnv('VITE_NETWORK_NAME', 'testnetBradbury')
@@ -181,9 +185,9 @@ describe('EquivLab workbench', () => {
     await user.click(await screen.findByRole('button', { name: /connect wallet/i }))
     await user.click(screen.getByRole('button', { name: /retrieve pinned source/i }))
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    const secondBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>
-    expect(secondBody).not.toHaveProperty('source')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    const thirdBody = JSON.parse(String(fetchMock.mock.calls[2][1]?.body)) as Record<string, unknown>
+    expect(thirdBody).not.toHaveProperty('source')
     expect(await screen.findByText('Retrieve pinned revision')).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: /analyze editor preview instead/i })).not.toBeChecked()
     expect(screen.getByTitle(address)).toBeInTheDocument()
@@ -204,6 +208,59 @@ describe('EquivLab workbench', () => {
 
     expect(screen.queryAllByText(/no preceding caller-derived authority guard/i)).toHaveLength(0)
     expect(screen.getByRole('button', { name: /run analysis to share/i })).toBeDisabled()
+  })
+
+  it('retrieves an external pinned revision before calculating its digest and analyzing', async () => {
+    const user = userEvent.setup()
+    const digest = await sourceSha256(backdooredTipJar)
+    const externalResponse = await makeFailResponse({
+      source: { canonical_sha256: digest, mode: 'retrieved', url: EXTERNAL_URL },
+    })
+    const sourceBytes = new TextEncoder().encode(backdooredTipJar)
+    const fetchMock = vi.fn(async (input: string, _init?: RequestInit) => input === EXTERNAL_URL
+      ? { ok: true, headers: { get: () => String(sourceBytes.byteLength) }, arrayBuffer: async () => sourceBytes.buffer }
+      : { ok: true, json: async () => externalResponse })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await user.clear(screen.getByRole('textbox', { name: 'Repository' }))
+    await user.type(screen.getByRole('textbox', { name: 'Repository' }), 'Siriron/genlayer-intelligent-contracts')
+    await user.clear(screen.getByRole('textbox', { name: 'Full commit' }))
+    await user.type(screen.getByRole('textbox', { name: 'Full commit' }), EXTERNAL_COMMIT)
+    await user.clear(screen.getByRole('textbox', { name: 'Contract path' }))
+    await user.type(screen.getByRole('textbox', { name: 'Contract path' }), 'contracts/updated/package_linker.py')
+
+    expect(screen.getAllByText('Custom revision').length).toBeGreaterThan(0)
+    expect(screen.getByText('calculated on analysis')).toBeInTheDocument()
+    const analyzeButton = screen.getByRole('button', { name: /analyze revision/i })
+    expect(analyzeButton).toBeEnabled()
+    await user.click(analyzeButton)
+
+    await screen.findByLabelText('Local analysis result: FAIL')
+    expect(fetchMock.mock.calls[0][0]).toBe(EXTERNAL_URL)
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/analyze')
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>
+    expect(requestBody.expected_sha256).toBe(digest)
+    expect(requestBody).not.toHaveProperty('source')
+    expect(screen.getByRole('textbox', { name: 'Contract source preview' })).toHaveValue(backdooredTipJar)
+    expect(screen.getByRole('button', { name: /copy canonical sha-256/i })).toBeInTheDocument()
+  })
+
+  it('explains a missing pinned file and leaves analysis available for retry', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404, headers: { get: () => null } })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await user.clear(screen.getByRole('textbox', { name: 'Repository' }))
+    await user.type(screen.getByRole('textbox', { name: 'Repository' }), 'Siriron/genlayer-intelligent-contracts')
+    const analyzeButton = screen.getByRole('button', { name: /analyze revision/i })
+    expect(analyzeButton).toBeEnabled()
+    await user.click(analyzeButton)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Pinned GitHub source could not be retrieved \(HTTP 404\)/)
+    expect(analyzeButton).toBeEnabled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('restores a shared report only as an unverified snapshot pending reproduction', async () => {
