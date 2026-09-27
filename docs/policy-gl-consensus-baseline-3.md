@@ -58,6 +58,17 @@ runtime cost.
 - Independent validator execution does not prove semantic equivalence between
   leader and validator questions or evidence.
 - Fixed prompt-framing markers do not prove prompt-injection resistance.
+- `PROMPT-01` inspects string construction on the prompt path, including
+  direct module helpers with one unconditional return. A guard in a comment,
+  unrelated helper, or variable name does not count. The local precheck marks
+  unresolved dynamic prompt construction `UNVERIFIABLE` rather than passing it.
+- These source changes do not alter finalized records or the code already
+  deployed at the existing Bradbury registry address. The separate
+  `Prompt01Overlay` contract can re-evaluate PROMPT-01 for an existing audit
+  under GenLayer consensus and bind its composite report to the original
+  report hash and exact source identity. It does not rewrite the registry or
+  turn the original result into a corrected one. A new registry deployment
+  would be required to make the improved rule the default for new reviews.
 - Findings may contain false positives and false negatives. Direct GenVM tests,
   transaction receipts, and registry readback remain separate evidence layers.
 

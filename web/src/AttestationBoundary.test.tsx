@@ -7,6 +7,7 @@ import type { AuditReport, OnChainReadback } from './types'
 
 const ADDRESS = `0x${'1'.repeat(40)}` as const
 const REGISTRY = `0x${'2'.repeat(40)}` as const
+const OVERLAY = `0x${'8'.repeat(40)}` as const
 const TX_HASH = `0x${'3'.repeat(64)}` as TransactionHash
 const SOURCE_HASH = '4'.repeat(64)
 const SOURCE_URL = `https://raw.githubusercontent.com/equivlab/demo/${'5'.repeat(40)}/fixtures/backdoored_tip_jar/contract.py`
@@ -14,6 +15,7 @@ const onEditSourceRevision = vi.fn()
 const onUsePinnedSource = vi.fn()
 
 const mocks = vi.hoisted(() => ({
+  overlayAddress: null as string | null,
   ensureWalletNetwork: vi.fn(),
   writeContract: vi.fn(),
   waitForTransactionReceipt: vi.fn(),
@@ -34,6 +36,7 @@ vi.mock('./genlayer', () => ({
       explorerBaseUrl: 'https://explorer-bradbury.genlayer.com',
       network: 'testnetBradbury',
       registryAddress: REGISTRY,
+      ...(mocks.overlayAddress ? { promptOverlayAddress: mocks.overlayAddress } : {}),
     },
     error: null,
   }),
@@ -79,10 +82,77 @@ afterEach(() => {
   cleanup()
   localStorage.clear()
   vi.clearAllMocks()
+  mocks.overlayAddress = null
   delete window.ethereum
 })
 
 describe('attestation lifecycle', () => {
+  it('shows an existing consensus correction without asking for a duplicate wallet transaction', async () => {
+    mocks.overlayAddress = OVERLAY
+    const localPrompt: AuditReport = {
+      ...report, failed_rules: [], findings: [], implemented_rules: ['PROMPT-01'],
+      report_sha256: 'a'.repeat(64), severity: 'LOW', status: 'MEETS_BASELINE',
+    }
+    const baseReport: AuditReport = {
+      ...localPrompt, failed_rules: ['PROMPT-01'], report_sha256: 'b'.repeat(64),
+      severity: 'HIGH', status: 'FAIL',
+    }
+    mocks.readLatestRegistryAudit.mockResolvedValueOnce({
+      ...authoritative,
+      audit: { ...authoritative.audit, status: 'FAIL' },
+      report: localPrompt,
+      baseReport,
+      promptOverlay: {
+        audit_id: '7', base_registry: REGISTRY, base_report_sha256: baseReport.report_sha256,
+        created_at: '2026-09-27T00:00:00Z', outcome: 'MEETS_BASELINE',
+        report_sha256: localPrompt.report_sha256, source_hash: SOURCE_HASH, source_url: SOURCE_URL,
+      },
+    } satisfies OnChainReadback)
+
+    render(<AttestationBoundary analysisLoading={false} report={localPrompt} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
+    expect(await screen.findByRole('region', { name: /consensus-corrected readback/i })).toBeInTheDocument()
+    expect(screen.getByText(/original registry report remains unchanged/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /reconcile prompt-01 onchain/i })).not.toBeInTheDocument()
+  })
+
+  it('reconciles only PROMPT-01 through a separate finalized GenLayer transaction', async () => {
+    const user = userEvent.setup()
+    mocks.overlayAddress = OVERLAY
+    const localPrompt: AuditReport = {
+      ...report, failed_rules: [], findings: [], implemented_rules: ['PROMPT-01'],
+      report_sha256: 'a'.repeat(64), severity: 'LOW', status: 'MEETS_BASELINE',
+    }
+    const baseReport: AuditReport = {
+      ...localPrompt, failed_rules: ['PROMPT-01'], report_sha256: 'b'.repeat(64),
+      severity: 'HIGH', status: 'FAIL',
+    }
+    const baseReadback: OnChainReadback = {
+      ...authoritative, audit: { ...authoritative.audit, status: 'FAIL' }, report: baseReport,
+    }
+    const correctedReadback: OnChainReadback = {
+      ...baseReadback, report: localPrompt, baseReport,
+      promptOverlay: {
+        audit_id: '7', base_registry: REGISTRY, base_report_sha256: baseReport.report_sha256,
+        created_at: '2026-09-27T00:00:00Z', outcome: 'MEETS_BASELINE',
+        report_sha256: localPrompt.report_sha256, source_hash: SOURCE_HASH, source_url: SOURCE_URL,
+      },
+    }
+    mocks.readLatestRegistryAudit.mockResolvedValueOnce(baseReadback).mockResolvedValueOnce(correctedReadback)
+    mocks.writeContract.mockResolvedValue(TX_HASH)
+    mocks.waitForTransactionReceipt.mockResolvedValue({ statusName: 'FINALIZED', txExecutionResultName: 'FINISHED_WITH_RETURN' })
+    window.ethereum = { request: vi.fn().mockResolvedValue([ADDRESS]) }
+
+    render(<AttestationBoundary analysisLoading={false} report={localPrompt} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
+    await user.click(await screen.findByRole('button', { name: /connect wallet to reconcile prompt-01/i }))
+    await user.click(await screen.findByRole('button', { name: /reconcile prompt-01 onchain/i }))
+
+    expect(await screen.findByRole('region', { name: /consensus-corrected readback/i })).toBeInTheDocument()
+    expect(screen.getByText(/original registry report remains unchanged/i)).toBeInTheDocument()
+    expect(mocks.writeContract).toHaveBeenCalledWith({
+      address: OVERLAY, functionName: 'reconcile', args: [7n], value: 0n,
+    })
+    expect(localStorage.getItem('equivlab:pending-prompt-overlay:v1')).toBeNull()
+  })
   it('claims authority only after a successful finalized receipt and source-matched readback', async () => {
     const user = userEvent.setup()
     window.ethereum = { request: vi.fn().mockResolvedValue([ADDRESS]) }
@@ -171,9 +241,9 @@ describe('attestation lifecycle', () => {
     })
     render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Local and registry rule outcomes differ')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local and on-chain rule outcomes differ')
     expect(screen.getByRole('alert')).toHaveTextContent('Local:')
-    expect(screen.getByRole('alert')).toHaveTextContent('Registry:')
+    expect(screen.getByRole('alert')).toHaveTextContent('On-chain:')
     expect(screen.queryByText('Rule outcomes match; report hashes differ')).not.toBeInTheDocument()
   })
 

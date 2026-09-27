@@ -10,6 +10,7 @@ declare module '*.css'
 interface ImportMetaEnv {
   readonly VITE_NETWORK_NAME?: string
   readonly VITE_REGISTRY_ADDRESS?: string
+  readonly VITE_PROMPT_OVERLAY_ADDRESS?: string
   readonly VITE_GENLAYER_RPC_URL?: string
   readonly VITE_EXPLORER_BASE_URL?: string
   readonly VITE_DEMO_REPOSITORY?: string

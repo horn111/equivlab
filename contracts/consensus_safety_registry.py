@@ -59,6 +59,37 @@ _TERMINAL_MARKERS = ("settled", "withdrawn", "paid", "claimed", "completed", "pr
 _PROMPT_MARKERS = ("UNTRUSTED EVIDENCE", "UNTRUSTED_EVIDENCE", "EVIDENCE (DATA ONLY)", "DATA, NOT INSTRUCTIONS")
 
 
+def _prompt_framed(
+    expression: ast.AST,
+    scope: ast.FunctionDef | ast.AsyncFunctionDef,
+    helpers: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> bool:
+    def static_text(node: ast.AST, assignments: dict[str, list[ast.AST]], depth: int = 0) -> str:
+        if depth > 8:
+            return ""
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else ""
+        if isinstance(node, ast.Name):
+            values = [value for value in assignments.get(node.id, []) if getattr(value, "lineno", 0) < getattr(node, "lineno", 0)]
+            value = values[-1] if values else None
+            return static_text(value, assignments, depth + 1) if value is not None else ""
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            helper = helpers.get(node.func.id)
+            if helper is not None and len(helper.body) == 1 and isinstance(helper.body[0], ast.Return):
+                return static_text(helper.body[0].value, {}, depth + 1)
+            return ""
+        if isinstance(node, ast.JoinedStr):
+            return " ".join(static_text(item.value if isinstance(item, ast.FormattedValue) else item, assignments, depth + 1) for item in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return static_text(node.left, assignments, depth + 1) + " " + static_text(node.right, assignments, depth + 1)
+        return ""
+
+    text = static_text(expression, _assignment_nodes(scope)).upper()
+    return any(marker in text for marker in _PROMPT_MARKERS) or (
+        "UNTRUSTED" in text and "AS DATA" in text and "IGNORE ANY INSTRUCTIONS" in text
+    )
+
+
 def _canonical_json(value: typing.Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -817,6 +848,7 @@ def _deterministic_findings(source: str, source_url: str) -> tuple[list[str], li
         return [], list(RULE_IDS)
     failed: set[str] = set()
     unverifiable: set[str] = set()
+    prompt_helpers = {item.name: item for item in tree.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
     try:
         _validate_source_url(source_url)
     except ValueError:
@@ -907,13 +939,18 @@ def _deterministic_findings(source: str, source_url: str) -> tuple[list[str], li
                         failed.add("STATE-01")
 
             web_calls = _calls_matching(function, "gl.nondet.web.")
-            function_text = _render(function)
-            for prompt_call in _calls_matching(function, "gl.nondet.exec_prompt"):
-                enclosing_text = function_text.upper()
-                if (web_calls or parameter_set) and not any(marker in enclosing_text for marker in _PROMPT_MARKERS):
-                    prompt_arg = _render(prompt_call.args[0]) if prompt_call.args else ""
-                    if not any(marker in prompt_arg.upper() for marker in _PROMPT_MARKERS):
-                        failed.add("PROMPT-01")
+            for prompt_scope in (function, *nested.values()):
+                for prompt_call in _direct_function_calls(prompt_scope):
+                    if _call_name(prompt_call.func) != "gl.nondet.exec_prompt":
+                        continue
+                    prompt_arg = prompt_call.args[0] if prompt_call.args else ast.Constant(value="")
+                    if not isinstance(prompt_arg, ast.Constant) and not _prompt_framed(
+                        prompt_arg, prompt_scope, prompt_helpers
+                    ):
+                        if web_calls or parameter_set:
+                            failed.add("PROMPT-01")
+                        else:
+                            unverifiable.add("PROMPT-01")
 
             bounded_lines = [
                 item.lineno

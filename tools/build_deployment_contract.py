@@ -1,4 +1,8 @@
-"""Build the compact, schema-preserving GenLayer deployment source."""
+"""Build a compact GenLayer source while retaining its public AST surface.
+
+The local AST comparison does not prove that Bradbury can generate a schema or
+execute the compact code. Check both against the target network before use.
+"""
 
 from __future__ import annotations
 

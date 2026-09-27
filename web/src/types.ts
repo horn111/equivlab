@@ -97,5 +97,18 @@ export interface OnChainAuditRecord {
 export interface OnChainReadback {
   audit: OnChainAuditRecord
   report: AuditReport
+  baseReport?: AuditReport
+  promptOverlay?: PromptOverlayPatch
   transactionHash: TransactionHash | null
+}
+
+export interface PromptOverlayPatch {
+  audit_id: string
+  base_registry: string
+  base_report_sha256: string
+  created_at: string
+  outcome: AuditStatus
+  report_sha256: string
+  source_hash: string
+  source_url: string
 }

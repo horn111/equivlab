@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 
@@ -247,17 +248,66 @@ def evaluate_evidence(index: AstIndex) -> RuleResult:
 
 def evaluate_prompt(index: AstIndex) -> RuleResult:
     failures: list[Evidence] = []
+    unverifiable: list[Evidence] = []
+    graph = CallPathAnalyzer(index)
     for function in sorted(index.functions.values(), key=lambda item: item.qualname):
         for prompt in function.prompt_calls:
             untrusted = set(prompt.dependencies) & {"web", "nondeterministic"}
             untrusted.update(item for item in prompt.dependencies if item.startswith("parameter:"))
-            if untrusted and not prompt.explicitly_framed:
+            try:
+                expression = ast.parse(prompt.prompt, mode="eval").body
+            except SyntaxError:
+                unverifiable.append(Evidence(prompt.line, function.qualname, "Prompt construction could not be resolved."))
+                continue
+            if _dynamic_prompt(expression) and graph.reaches_web_observation(function.qualname):
+                untrusted.add("indirect-web")
+            framed = _prompt_framed(expression, index.tree)
+            if untrusted and not framed:
                 failures.append(
-                    Evidence(prompt.line, function.qualname, "Untrusted prompt data lacks an explicit data-not-instructions framing marker.")
+                    Evidence(prompt.line, function.qualname, "A dynamic prompt in a web-observing or parameter-derived path lacks explicit evidence framing.")
+                )
+            elif not framed and _dynamic_prompt(expression):
+                unverifiable.append(
+                    Evidence(prompt.line, function.qualname, "Dynamic prompt input could not be traced to a trusted constant or an explicit framing guard.")
                 )
     if failures:
-        return RuleResult("PROMPT-01", "FAIL", "Untrusted content enters a model prompt without explicit evidence framing.", tuple(failures))
-    return RuleResult("PROMPT-01", "MEETS_BASELINE", "Discovered untrusted prompt inputs use an explicit evidence-framing marker.")
+        return RuleResult("PROMPT-01", "FAIL", "A dynamic prompt in an untrusted-input path lacks explicit evidence framing.", tuple(failures))
+    if unverifiable:
+        return RuleResult("PROMPT-01", "UNVERIFIABLE", "Dynamic prompt construction could not be proven to frame external data.", tuple(unverifiable))
+    return RuleResult("PROMPT-01", "MEETS_BASELINE", "No unframed dynamic prompt was detected in statically resolved paths.")
+
+
+def _prompt_framed(expression: ast.AST, tree: ast.Module) -> bool:
+    helpers = {item.name: item for item in tree.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def static_text(node: ast.AST, assignments: dict[str, ast.AST], depth: int = 0) -> str:
+        if depth > 8:
+            return ""
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else ""
+        if isinstance(node, ast.Name):
+            value = assignments.get(node.id)
+            return static_text(value, assignments, depth + 1) if value is not None else ""
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            helper = helpers.get(node.func.id)
+            if helper is not None and len(helper.body) == 1 and isinstance(helper.body[0], ast.Return):
+                return static_text(helper.body[0].value, {}, depth + 1)
+            return ""
+        if isinstance(node, ast.JoinedStr):
+            return " ".join(static_text(item.value if isinstance(item, ast.FormattedValue) else item, assignments, depth + 1) for item in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return static_text(node.left, assignments, depth + 1) + " " + static_text(node.right, assignments, depth + 1)
+        return ""
+
+    text = static_text(expression, {}).upper()
+    markers = ("UNTRUSTED EVIDENCE", "UNTRUSTED_EVIDENCE", "EVIDENCE (DATA ONLY)", "DATA, NOT INSTRUCTIONS")
+    return any(marker in text for marker in markers) or (
+        "UNTRUSTED" in text and "AS DATA" in text and "IGNORE ANY INSTRUCTIONS" in text
+    )
+
+
+def _dynamic_prompt(expression: ast.AST) -> bool:
+    return any(isinstance(item, (ast.Name, ast.Call, ast.FormattedValue, ast.Attribute, ast.Subscript)) for item in ast.walk(expression))
 
 
 def _scope_reaches_web(index: AstIndex, root_name: str, graph: CallPathAnalyzer) -> bool:

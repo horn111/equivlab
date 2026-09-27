@@ -1,6 +1,6 @@
 import { localnet, studionet, testnetAsimov, testnetBradbury } from 'genlayer-js/chains'
-import type { GenLayerClient, GenLayerTransaction, TransactionHash } from 'genlayer-js/types'
-import type { AuditReport, OnChainAuditRecord, OnChainReadback } from './types'
+import { TransactionHashVariant, type GenLayerClient, type GenLayerTransaction, type TransactionHash } from 'genlayer-js/types'
+import type { AuditReport, OnChainAuditRecord, OnChainReadback, PromptOverlayPatch } from './types'
 
 export const SUPPORTED_NETWORKS = ['localnet', 'studionet', 'testnetAsimov', 'testnetBradbury'] as const
 export type SupportedNetwork = (typeof SUPPORTED_NETWORKS)[number]
@@ -19,6 +19,7 @@ export interface GenLayerConfig {
   explorerBaseUrl: string
   network: SupportedNetwork
   registryAddress: RegistryAddress
+  promptOverlayAddress?: RegistryAddress
   rpcUrl?: string
 }
 
@@ -58,6 +59,10 @@ export function resolveGenLayerConfig(env: ImportMetaEnv): ConfigResolution {
   if (!registryValue || !/^0x[0-9a-fA-F]{40}$/.test(registryValue)) {
     return { config: null, error: 'VITE_REGISTRY_ADDRESS must be a 20-byte 0x-prefixed address.' }
   }
+  const overlayValue = env.VITE_PROMPT_OVERLAY_ADDRESS?.trim()
+  if (overlayValue && !/^0x[0-9a-fA-F]{40}$/.test(overlayValue)) {
+    return { config: null, error: 'VITE_PROMPT_OVERLAY_ADDRESS must be a 20-byte 0x-prefixed address.' }
+  }
 
   try {
     const rpcUrl = cleanOptionalUrl(env.VITE_GENLAYER_RPC_URL)
@@ -68,6 +73,7 @@ export function resolveGenLayerConfig(env: ImportMetaEnv): ConfigResolution {
         explorerBaseUrl: configuredExplorer ?? chainExplorer ?? '',
         network: networkValue as SupportedNetwork,
         registryAddress: registryValue as RegistryAddress,
+        ...(overlayValue ? { promptOverlayAddress: overlayValue as RegistryAddress } : {}),
         ...(rpcUrl ? { rpcUrl } : {}),
       },
       error: null,
@@ -202,6 +208,45 @@ function parseReport(value: unknown): AuditReport {
   return report as unknown as AuditReport
 }
 
+function parsePromptOverlayPatch(value: unknown): PromptOverlayPatch {
+  const patch = parseJsonObject(value, 'PROMPT-01 correction')
+  if (
+    typeof patch.audit_id !== 'string'
+    || typeof patch.base_registry !== 'string'
+    || typeof patch.base_report_sha256 !== 'string'
+    || typeof patch.created_at !== 'string'
+    || !['MEETS_BASELINE', 'FAIL', 'UNVERIFIABLE'].includes(String(patch.outcome))
+    || typeof patch.report_sha256 !== 'string'
+    || typeof patch.source_hash !== 'string'
+    || typeof patch.source_url !== 'string'
+  ) {
+    throw new Error('PROMPT-01 correction omitted required source or report fields.')
+  }
+  return patch as unknown as PromptOverlayPatch
+}
+
+function otherRulesMatch(base: AuditReport, corrected: AuditReport): boolean {
+  return base.implemented_rules.join('\n') === corrected.implemented_rules.join('\n')
+    && (['failed_rules', 'warning_rules', 'unverifiable_rules'] as const).every((field) =>
+      base[field].filter((rule) => rule !== 'PROMPT-01').join('\n')
+      === corrected[field].filter((rule) => rule !== 'PROMPT-01').join('\n'),
+    )
+}
+
+function promptOutcome(report: AuditReport): 'FAIL' | 'WARN' | 'UNVERIFIABLE' | 'MEETS_BASELINE' {
+  if (report.failed_rules.includes('PROMPT-01')) return 'FAIL'
+  if (report.unverifiable_rules.includes('PROMPT-01')) return 'UNVERIFIABLE'
+  if (report.warning_rules.includes('PROMPT-01')) return 'WARN'
+  return 'MEETS_BASELINE'
+}
+
+function reportStatusMatchesRules(report: AuditReport): boolean {
+  const status = report.failed_rules.length ? 'FAIL'
+    : report.unverifiable_rules.length ? 'UNVERIFIABLE'
+      : report.warning_rules.length ? 'WARN' : 'MEETS_BASELINE'
+  return report.status === status
+}
+
 export async function readAuthoritativeAudit(
   client: GenLayerClient<(typeof NETWORKS)[SupportedNetwork]>,
   config: GenLayerConfig,
@@ -239,19 +284,52 @@ export async function readLatestRegistryAudit(
     client.readContract({ address: config.registryAddress, functionName: 'get_report', args: [auditId] }),
   ])
   const audit = parseAudit(auditValue)
-  const report = parseReport(reportValue)
+  const baseReport = parseReport(reportValue)
   if (
     audit.id !== latest
     || audit.source_hash !== sourceHash
     || audit.source_url !== sourceUrl
     || audit.policy !== policy
-    || report.source.canonical_sha256 !== sourceHash
-    || report.source.url !== sourceUrl
-    || report.policy !== policy
+    || baseReport.source.canonical_sha256 !== sourceHash
+    || baseReport.source.url !== sourceUrl
+    || baseReport.policy !== policy
   ) {
     throw new Error('Authoritative readback does not match the requested source identity and policy.')
   }
-  return { audit, report, transactionHash: txHash }
+  if (!config.promptOverlayAddress) return { audit, report: baseReport, transactionHash: txHash }
+
+  const patchValue = await client.readContract({
+    address: config.promptOverlayAddress,
+    functionName: 'get_patch',
+    args: [auditId],
+    transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
+  })
+  if (patchValue === '') return { audit, report: baseReport, transactionHash: txHash }
+  const correctedValue = await client.readContract({
+    address: config.promptOverlayAddress,
+    functionName: 'get_report',
+    args: [auditId],
+    transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
+  })
+  const patch = parsePromptOverlayPatch(patchValue)
+  const corrected = parseReport(correctedValue)
+  if (
+    patch.audit_id !== latest
+    || patch.base_registry.toLowerCase() !== config.registryAddress.toLowerCase()
+    || patch.base_report_sha256 !== baseReport.report_sha256
+    || patch.source_hash !== sourceHash
+    || patch.source_url !== sourceUrl
+    || patch.report_sha256 !== corrected.report_sha256
+    || corrected.source.canonical_sha256 !== sourceHash
+    || corrected.source.url !== sourceUrl
+    || corrected.policy !== policy
+    || !otherRulesMatch(baseReport, corrected)
+    || promptOutcome(corrected) !== patch.outcome
+    || !reportStatusMatchesRules(corrected)
+  ) {
+    throw new Error('PROMPT-01 correction does not match the base audit and exact source identity.')
+  }
+  return { audit, report: corrected, baseReport, promptOverlay: patch, transactionHash: txHash }
 }
 
 export function isSuccessfulExecution(receipt: GenLayerTransaction): boolean {

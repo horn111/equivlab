@@ -15,6 +15,7 @@ const ADDRESS = `0x${'1'.repeat(40)}` as const
 const TX_HASH = `0x${'2'.repeat(64)}` as TransactionHash
 const SOURCE_HASH = '3'.repeat(64)
 const SOURCE_URL = `https://raw.githubusercontent.com/equivlab/demo/${'4'.repeat(40)}/contracts/example.py`
+const OVERLAY = `0x${'8'.repeat(40)}` as const
 
 describe('GenLayer deployment configuration', () => {
   it('keeps the on-chain boundary unavailable while deployment values are empty', () => {
@@ -160,5 +161,119 @@ describe('authoritative readback', () => {
       functionName: 'get_latest',
       args: [SOURCE_URL, SOURCE_HASH, 'gl-consensus-baseline-3'],
     })
+  })
+
+  it('uses a source-matched PROMPT-01 correction without hiding the original registry report', async () => {
+    const baseReport = {
+      failed_rules: ['PROMPT-01'], findings: [], implemented_rules: ['AUTH-01', 'PROMPT-01'],
+      policy: 'gl-consensus-baseline-3', report_sha256: 'a'.repeat(64), schema: 'equivlab-report-v2',
+      severity: 'HIGH', scope: 'Base decision',
+      source: { canonical_sha256: SOURCE_HASH, mode: 'retrieved', url: SOURCE_URL },
+      status: 'FAIL', unverifiable_rules: [], warning_rules: [],
+    }
+    const corrected = {
+      ...baseReport, failed_rules: [], findings: [], report_sha256: 'b'.repeat(64),
+      severity: 'LOW', scope: 'Consensus-corrected decision', status: 'MEETS_BASELINE',
+    }
+    const patch = {
+      audit_id: '7', base_registry: ADDRESS, base_report_sha256: baseReport.report_sha256,
+      created_at: '2026-09-27T00:00:00Z', outcome: 'MEETS_BASELINE',
+      report_sha256: corrected.report_sha256, source_hash: SOURCE_HASH, source_url: SOURCE_URL,
+    }
+    const audit = {
+      challenged: false, created_at: '2026-09-27T00:00:00Z', id: '7',
+      policy: baseReport.policy, requester: ADDRESS, source_hash: SOURCE_HASH,
+      source_url: SOURCE_URL, status: 'FAIL', superseded_by: null, supersedes_id: null,
+    }
+    const readContract = vi.fn()
+      .mockResolvedValueOnce('7')
+      .mockResolvedValueOnce(JSON.stringify(audit))
+      .mockResolvedValueOnce(JSON.stringify(baseReport))
+      .mockResolvedValueOnce(JSON.stringify(patch))
+      .mockResolvedValueOnce(JSON.stringify(corrected))
+    const config = resolveGenLayerConfig({
+      VITE_NETWORK_NAME: 'testnetBradbury', VITE_REGISTRY_ADDRESS: ADDRESS,
+      VITE_PROMPT_OVERLAY_ADDRESS: OVERLAY,
+    } as ImportMetaEnv).config!
+    const readback = await readLatestRegistryAudit(
+      { readContract } as never, config, SOURCE_HASH, SOURCE_URL, baseReport.policy,
+    )
+    expect(readback?.report.status).toBe('MEETS_BASELINE')
+    expect(readback?.baseReport?.status).toBe('FAIL')
+    expect(readback?.promptOverlay?.base_report_sha256).toBe(baseReport.report_sha256)
+    expect(readContract).toHaveBeenNthCalledWith(4, {
+      address: OVERLAY, functionName: 'get_patch', args: [7n], transactionHashVariant: 'latest-final',
+    })
+    expect(readContract).toHaveBeenNthCalledWith(5, {
+      address: OVERLAY, functionName: 'get_report', args: [7n], transactionHashVariant: 'latest-final',
+    })
+  })
+
+  it('rejects a correction that changes another rule or base report identity', async () => {
+    const base = {
+      failed_rules: ['PROMPT-01'], findings: [], implemented_rules: ['AUTH-01', 'PROMPT-01'],
+      policy: 'gl-consensus-baseline-3', report_sha256: 'a'.repeat(64), schema: 'equivlab-report-v2',
+      severity: 'HIGH', scope: 'Base decision',
+      source: { canonical_sha256: SOURCE_HASH, mode: 'retrieved', url: SOURCE_URL },
+      status: 'FAIL', unverifiable_rules: [], warning_rules: [],
+    }
+    const audit = {
+      challenged: false, created_at: '2026-09-27T00:00:00Z', id: '7',
+      policy: base.policy, requester: ADDRESS, source_hash: SOURCE_HASH,
+      source_url: SOURCE_URL, status: 'FAIL', superseded_by: null, supersedes_id: null,
+    }
+    const patch = {
+      audit_id: '7', base_registry: ADDRESS, base_report_sha256: base.report_sha256,
+      created_at: '2026-09-27T00:00:00Z', outcome: 'MEETS_BASELINE', report_sha256: 'b'.repeat(64),
+      source_hash: SOURCE_HASH, source_url: SOURCE_URL,
+    }
+    const changedOtherRule = { ...base, failed_rules: ['AUTH-01'], report_sha256: patch.report_sha256 }
+    const readContract = vi.fn()
+      .mockResolvedValueOnce('7')
+      .mockResolvedValueOnce(JSON.stringify(audit))
+      .mockResolvedValueOnce(JSON.stringify(base))
+      .mockResolvedValueOnce(JSON.stringify(patch))
+      .mockResolvedValueOnce(JSON.stringify(changedOtherRule))
+    const config = resolveGenLayerConfig({
+      VITE_NETWORK_NAME: 'testnetBradbury', VITE_REGISTRY_ADDRESS: ADDRESS,
+      VITE_PROMPT_OVERLAY_ADDRESS: OVERLAY,
+    } as ImportMetaEnv).config!
+    await expect(readLatestRegistryAudit(
+      { readContract } as never, config, SOURCE_HASH, SOURCE_URL, base.policy,
+    )).rejects.toThrow(/PROMPT-01 correction does not match/i)
+  })
+
+  it('rejects a correction whose PROMPT-01 rule outcome contradicts the patch', async () => {
+    const base = {
+      failed_rules: ['PROMPT-01'], findings: [], implemented_rules: ['AUTH-01', 'PROMPT-01'],
+      policy: 'gl-consensus-baseline-3', report_sha256: 'a'.repeat(64), schema: 'equivlab-report-v2',
+      severity: 'HIGH', scope: 'Base decision',
+      source: { canonical_sha256: SOURCE_HASH, mode: 'retrieved', url: SOURCE_URL },
+      status: 'FAIL', unverifiable_rules: [], warning_rules: [],
+    }
+    const audit = {
+      challenged: false, created_at: '2026-09-27T00:00:00Z', id: '7',
+      policy: base.policy, requester: ADDRESS, source_hash: SOURCE_HASH,
+      source_url: SOURCE_URL, status: 'FAIL', superseded_by: null, supersedes_id: null,
+    }
+    const corrected = { ...base, report_sha256: 'b'.repeat(64) }
+    const patch = {
+      audit_id: '7', base_registry: ADDRESS, base_report_sha256: base.report_sha256,
+      created_at: '2026-09-27T00:00:00Z', outcome: 'MEETS_BASELINE',
+      report_sha256: corrected.report_sha256, source_hash: SOURCE_HASH, source_url: SOURCE_URL,
+    }
+    const readContract = vi.fn()
+      .mockResolvedValueOnce('7')
+      .mockResolvedValueOnce(JSON.stringify(audit))
+      .mockResolvedValueOnce(JSON.stringify(base))
+      .mockResolvedValueOnce(JSON.stringify(patch))
+      .mockResolvedValueOnce(JSON.stringify(corrected))
+    const config = resolveGenLayerConfig({
+      VITE_NETWORK_NAME: 'testnetBradbury', VITE_REGISTRY_ADDRESS: ADDRESS,
+      VITE_PROMPT_OVERLAY_ADDRESS: OVERLAY,
+    } as ImportMetaEnv).config!
+    await expect(readLatestRegistryAudit(
+      { readContract } as never, config, SOURCE_HASH, SOURCE_URL, base.policy,
+    )).rejects.toThrow(/PROMPT-01 correction does not match/i)
   })
 })

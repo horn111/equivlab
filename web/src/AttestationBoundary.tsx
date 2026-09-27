@@ -24,6 +24,7 @@ import ExactValue from './ExactValue'
 import type { AnalyzeResponse, AuditReport, OnChainReadback } from './types'
 
 const PENDING_KEY = 'equivlab:pending-attestation:v1'
+const PENDING_OVERLAY_KEY = 'equivlab:pending-prompt-overlay:v1'
 const ACCEPTED = 'ACCEPTED' as TransactionStatus
 const FINALIZED = 'FINALIZED' as TransactionStatus
 
@@ -33,6 +34,21 @@ function sameRuleOutcomes(local: AuditReport, registry: AuditReport): boolean {
     && (['implemented_rules', 'failed_rules', 'warning_rules', 'unverifiable_rules'] as const).every(
       (field) => [...local[field]].sort().join('\n') === [...registry[field]].sort().join('\n'),
     )
+}
+
+function sameNonPromptRules(local: AuditReport, registry: AuditReport): boolean {
+  return [...local.implemented_rules].sort().join('\n') === [...registry.implemented_rules].sort().join('\n')
+    && (['failed_rules', 'warning_rules', 'unverifiable_rules'] as const).every((field) =>
+      local[field].filter((rule) => rule !== 'PROMPT-01').sort().join('\n')
+      === registry[field].filter((rule) => rule !== 'PROMPT-01').sort().join('\n'),
+    )
+}
+
+function promptOutcome(report: AuditReport): string {
+  if (report.failed_rules.includes('PROMPT-01')) return 'FAIL'
+  if (report.unverifiable_rules.includes('PROMPT-01')) return 'UNVERIFIABLE'
+  if (report.warning_rules.includes('PROMPT-01')) return 'WARN'
+  return 'MEETS_BASELINE'
 }
 
 function outcomeSummary(report: AuditReport): string {
@@ -58,6 +74,15 @@ interface PendingAttestation {
   registryAddress: string
   sourceHash: string
   sourceUrl: string
+  transactionHash: TransactionHash
+}
+
+interface PendingPromptOverlay {
+  auditId: string
+  network: string
+  overlayAddress: string
+  registryAddress: string
+  sourceHash: string
   transactionHash: TransactionHash
 }
 
@@ -116,6 +141,34 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
   const [challengeReasonHash, setChallengeReasonHash] = useState('')
   const [challengeTransactionHash, setChallengeTransactionHash] = useState<TransactionHash | null>(null)
   const [challengeBusy, setChallengeBusy] = useState(false)
+  const [overlayBusy, setOverlayBusy] = useState(false)
+  const [overlayTransactionHash, setOverlayTransactionHash] = useState<TransactionHash | null>(null)
+
+  const reconcilePromptOverlay = useCallback(async (hash: TransactionHash, auditId: string) => {
+    if (!config?.promptOverlayAddress) return
+    setOverlayBusy(true)
+    setError(null)
+    try {
+      const client = await createGenLayerReadClient(config)
+      const receipt = await client.waitForTransactionReceipt({ hash, status: FINALIZED, interval: 5_000, retries: 720 })
+      if (isUndeterminedReceipt(receipt) || !isSuccessfulExecution(receipt)) {
+        throw new Error(`PROMPT-01 correction did not finalize successfully (${receipt.statusName ?? 'unknown state'}).`)
+      }
+      const updated = await readLatestRegistryAudit(
+        client, config, report.source.canonical_sha256, report.source.url, report.policy,
+      )
+      if (!updated?.promptOverlay || updated.audit.id !== auditId) {
+        throw new Error('The finalized correction was not found for the exact base audit and source.')
+      }
+      setReadback(updated)
+      setAnnouncement(`PROMPT-01 correction finalized for audit ${auditId}. Composite result: ${updated.report.status}.`)
+      try { localStorage.removeItem(PENDING_OVERLAY_KEY) } catch { /* Storage may be unavailable. */ }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'PROMPT-01 correction reconciliation failed.')
+    } finally {
+      setOverlayBusy(false)
+    }
+  }, [config, report.policy, report.source.canonical_sha256, report.source.url])
 
   const lookupExisting = useCallback(async () => {
     if (!config || sourceMode !== 'retrieved') return
@@ -137,6 +190,29 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
         setExistingLookup('found')
         setStage('complete')
         setAnnouncement(`Existing registry audit ${existing.audit.id} loaded. Finalization was not independently checked. Result: ${existing.report.status}.`)
+        if (existing.promptOverlay) {
+          try { localStorage.removeItem(PENDING_OVERLAY_KEY) } catch { /* Storage may be unavailable. */ }
+        } else if (config.promptOverlayAddress) {
+          try {
+            const raw = localStorage.getItem(PENDING_OVERLAY_KEY)
+            if (raw) {
+              const pending = JSON.parse(raw) as PendingPromptOverlay
+              if (
+                pending.auditId === existing.audit.id
+                && pending.network === config.network
+                && pending.overlayAddress.toLowerCase() === config.promptOverlayAddress.toLowerCase()
+                && pending.registryAddress.toLowerCase() === config.registryAddress.toLowerCase()
+                && pending.sourceHash === report.source.canonical_sha256
+                && /^0x[0-9a-fA-F]{64}$/.test(pending.transactionHash)
+              ) {
+                setOverlayTransactionHash(pending.transactionHash)
+                void reconcilePromptOverlay(pending.transactionHash, pending.auditId)
+              }
+            }
+          } catch {
+            localStorage.removeItem(PENDING_OVERLAY_KEY)
+          }
+        }
       } else {
         setReadback(null)
         setReadbackAuthority(null)
@@ -153,10 +229,11 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
       setStage('idle')
       setAnnouncement(`Registry lookup failed: ${message}`)
     }
-  }, [config, report, sourceMode])
+  }, [config, reconcilePromptOverlay, report, sourceMode])
 
   useEffect(() => {
     setTransactionHash(null)
+    setOverlayTransactionHash(null)
     setReadback(null)
     setReadbackAuthority(null)
     setExistingLookup('idle')
@@ -364,12 +441,55 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
     }
   }, [account, challengeReasonHash, config, readback, report])
 
+  const requestPromptOverlay = useCallback(async () => {
+    if (!config?.promptOverlayAddress || !account || !window.ethereum || !readback || readback.promptOverlay) return
+    setOverlayBusy(true)
+    setError(null)
+    try {
+      await ensureWalletNetwork(config, window.ethereum)
+      const client = await createGenLayerWriteClient(config, account, window.ethereum)
+      const submitted = await client.writeContract({
+        address: config.promptOverlayAddress,
+        functionName: 'reconcile',
+        args: [BigInt(readback.audit.id)],
+        value: 0n,
+      })
+      if (typeof submitted !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(submitted)) {
+        throw new Error('The wallet did not return a canonical correction transaction hash.')
+      }
+      const hash = submitted as TransactionHash
+      setOverlayTransactionHash(hash)
+      const pending: PendingPromptOverlay = {
+        auditId: readback.audit.id,
+        network: config.network,
+        overlayAddress: config.promptOverlayAddress,
+        registryAddress: config.registryAddress,
+        sourceHash: report.source.canonical_sha256,
+        transactionHash: hash,
+      }
+      try { localStorage.setItem(PENDING_OVERLAY_KEY, JSON.stringify(pending)) } catch { /* In-memory reconciliation still proceeds. */ }
+      setAnnouncement(`PROMPT-01 correction transaction ${hash} submitted.`)
+      await reconcilePromptOverlay(hash, readback.audit.id)
+    } catch (caught) {
+      setError(walletErrorMessage(caught, 'PROMPT-01 correction was not submitted.'))
+    } finally {
+      setOverlayBusy(false)
+    }
+  }, [account, config, readback, reconcilePromptOverlay, report.source.canonical_sha256])
+
   const explorerUrl = config && transactionHash ? transactionExplorerUrl(config, transactionHash) : null
   const challengeExplorerUrl = config && challengeTransactionHash ? transactionExplorerUrl(config, challengeTransactionHash) : null
+  const overlayExplorerUrl = config && overlayTransactionHash ? transactionExplorerUrl(config, overlayTransactionHash) : null
   const currentPosition = stagePosition(stage)
   const outcomesMatch = readback ? sameRuleOutcomes(report, readback.report) : false
+  const promptCorrectionAvailable = Boolean(
+    config?.promptOverlayAddress && readback && !readback.promptOverlay && !overlayTransactionHash
+    && promptOutcome(report) !== promptOutcome(readback.report)
+    && sameNonPromptRules(report, readback.report),
+  )
+  const promptCorrectionPending = Boolean(config?.promptOverlayAddress && readback && !readback.promptOverlay && overlayTransactionHash)
   const reportHashesMatch = readback?.report.report_sha256 === report.report_sha256
-  const busy = existingLookup === 'checking' || ['connecting', 'signing', 'consensus', 'finalizing', 'readback'].includes(stage)
+  const busy = overlayBusy || existingLookup === 'checking' || ['connecting', 'signing', 'consensus', 'finalizing', 'readback'].includes(stage)
   const authorityCopy = existingLookup === 'checking'
     ? 'Checking this exact source identity against the registry.'
     : existingLookup === 'none'
@@ -377,7 +497,9 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
       : existingLookup === 'found'
         ? readbackAuthority === 'finalized'
           ? STAGE_COPY.complete
-          : 'Registry record matches the exact source identity. Finalization was not independently checked.'
+          : readback?.promptOverlay
+            ? 'A finalized PROMPT-01 correction matches the exact source identity. Original registry finalization was not independently checked.'
+            : 'Registry record matches the exact source identity. Finalization was not independently checked.'
         : existingLookup === 'error'
           ? 'Registry lookup failed. No absence claim is made.'
           : config ? STAGE_COPY[stage] : 'SEPARATE AUTHORITY · NO ON-CHAIN RECORD'
@@ -403,7 +525,7 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
         {config && !account && (
           <button className="secondary-action" onClick={connectWallet} disabled={busy}>
             {stage === 'connecting' ? <SpinnerGapIcon className="spin" /> : <WalletIcon />}
-            {stage === 'connecting' ? 'Authorizing wallet' : readback ? 'Connect wallet to challenge' : 'Connect wallet'}
+            {stage === 'connecting' ? 'Authorizing wallet' : promptCorrectionAvailable ? 'Connect wallet to reconcile PROMPT-01' : readback ? 'Connect wallet to challenge' : 'Connect wallet'}
           </button>
         )}
         {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
@@ -458,6 +580,31 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
         </div>
       )}
 
+      {promptCorrectionAvailable && (
+        <div className="registry-guidance prompt-correction" role="status">
+          <div>
+            <strong>PROMPT-01 differs between the local precheck and base registry</strong>
+            <p>The base audit is immutable. A separate GenLayer contract can recheck the same pinned source through consensus and record a composite report. It changes only PROMPT-01. This requires another wallet transaction and network fee.</p>
+          </div>
+          {account && <button className="secondary-action" type="button" onClick={requestPromptOverlay} disabled={busy}>
+            {overlayBusy ? <SpinnerGapIcon className="spin" /> : <SealCheckIcon />}
+            {overlayBusy ? 'Waiting for correction' : 'Reconcile PROMPT-01 onchain'}
+          </button>}
+        </div>
+      )}
+
+      {promptCorrectionPending && (
+        <div className="registry-guidance prompt-correction" role="status">
+          <div>
+            <strong>PROMPT-01 correction submitted</strong>
+            <p>The original registry result remains in force until the separate correction finalizes. This page is checking the transaction and finalized readback. No second request is needed.</p>
+          </div>
+          {!overlayBusy && overlayTransactionHash && readback && <button className="secondary-action" type="button" onClick={() => void reconcilePromptOverlay(overlayTransactionHash, readback.audit.id)}>
+            <ArrowClockwiseIcon /> Check finalization
+          </button>}
+        </div>
+      )}
+
       {config && account && sourceMode === 'retrieved' && !transactionHash && existingLookup === 'none' && (
         <label className="supersedes-field">
           <span>SUPERSEDES AUDIT ID · OPTIONAL</span>
@@ -490,22 +637,26 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
       {readback && (
         <section
           className="authoritative-readback"
-          aria-label={readbackAuthority === 'finalized' ? 'Finalized authoritative registry readback' : 'Existing registry readback'}
+          aria-label={readback.promptOverlay ? 'Consensus-corrected readback' : readbackAuthority === 'finalized' ? 'Finalized authoritative registry readback' : 'Existing registry readback'}
         >
           <div className="readback-heading">
-            <span>{readbackAuthority === 'finalized' ? 'FINALIZED AUTHORITATIVE READBACK' : 'ALREADY REGISTERED'}</span>
+            <span>{readback.promptOverlay ? 'BASE AUDIT + PROMPT-01 CORRECTION' : readbackAuthority === 'finalized' ? 'FINALIZED AUTHORITATIVE READBACK' : 'ALREADY REGISTERED'}</span>
             <strong className={`status-${readback.report.status.toLowerCase()}`}>{readback.report.status}</strong>
             {readbackAuthority !== 'finalized' && <small>AUDIT {readback.audit.id} · FINALIZATION NOT INDEPENDENTLY CHECKED</small>}
           </div>
           <dl>
             <div><dt>AUDIT ID</dt><dd>{readback.audit.id}</dd></div>
-            <div><dt>REGISTRY REPORT SHA-256</dt><dd><ExactValue label="Registry report SHA-256" value={readback.report.report_sha256} onStatus={setAnnouncement} /></dd></div>
+            <div><dt>{readback.promptOverlay ? 'COMPOSITE REPORT SHA-256' : 'REGISTRY REPORT SHA-256'}</dt><dd><ExactValue label={readback.promptOverlay ? 'Composite report SHA-256' : 'Registry report SHA-256'} value={readback.report.report_sha256} onStatus={setAnnouncement} /></dd></div>
             <div><dt>REQUESTER</dt><dd><ExactValue label="Requester address" value={readback.audit.requester} onStatus={setAnnouncement} /></dd></div>
             <div><dt>CHALLENGED</dt><dd>{readback.audit.challenged ? 'YES' : 'NO'}</dd></div>
           </dl>
+          {readback.promptOverlay && <div className="overlay-provenance">
+            <p>The original registry report remains unchanged ({readback.baseReport?.status}; SHA-256 {readback.promptOverlay.base_report_sha256}). The separate, finalized PROMPT-01 correction returned {readback.promptOverlay.outcome} and produced the composite result above.</p>
+            <div><span>CORRECTION CONTRACT</span><ExactValue label="PROMPT-01 correction contract" value={config?.promptOverlayAddress ?? ''} onStatus={setAnnouncement} /></div>
+          </div>}
           <div className={`report-comparison ${outcomesMatch ? '' : 'report-comparison-different'}`} role={outcomesMatch ? 'note' : 'alert'}>
             <strong>{!outcomesMatch
-              ? 'Local and registry rule outcomes differ'
+              ? 'Local and on-chain rule outcomes differ'
               : reportHashesMatch ? 'Local and registry report hashes match' : 'Rule outcomes match; report hashes differ'}</strong>
             <p>{!outcomesMatch
               ? 'These reports cover the same source and policy, but differ in rule coverage, outcomes, or severity. Compare the results before using this audit.'
@@ -514,13 +665,13 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
                 : 'The local precheck and registry produce separate reports. Each SHA-256 covers the full report, including evidence and descriptions. Matching rule outcomes do not require identical report text.'}</p>
             {!outcomesMatch && <>
               <p><b>Local:</b> {outcomeSummary(report)}</p>
-              <p><b>Registry:</b> {outcomeSummary(readback.report)}</p>
+              <p><b>On-chain:</b> {outcomeSummary(readback.report)}</p>
             </>}
           </div>
           {account && (
             <details className="challenge-disclosure">
               <summary>Challenge this registry record</summary>
-              <p>Submit a SHA-256 hash that commits to your challenge reason. This appends a challenge record; it does not replace the audit.</p>
+              <p>Submit a SHA-256 hash that commits to your challenge reason. This appends a challenge record to the base registry; it does not replace the audit or a PROMPT-01 correction.</p>
               <div className="challenge-control">
                 <label>
                   <span>CHALLENGE REASON SHA-256</span>
@@ -534,6 +685,7 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
             </details>
           )}
           {challengeExplorerUrl && <a className="challenge-link" href={challengeExplorerUrl} target="_blank" rel="noreferrer">Challenge transaction <ArrowSquareOutIcon /></a>}
+          {overlayExplorerUrl && <a className="challenge-link" href={overlayExplorerUrl} target="_blank" rel="noreferrer">PROMPT-01 correction transaction <ArrowSquareOutIcon /></a>}
         </section>
       )}
 

@@ -9,6 +9,13 @@ The four possible report statuses are `MEETS_BASELINE`, `WARN`, `FAIL`, and
 meets the implemented rules of the named policy. It is not formal verification
 or a security guarantee.
 
+The deployed baseline-3 registry is immutable. Where its PROMPT-01 outcome
+differs from the improved local analyzer, a separate GenLayer contract can
+recheck the same pinned source under consensus and store a source-matched
+composite report. The UI shows the original registry result alongside the
+correction; it never rewrites the original audit. A fresh correction requires
+its own wallet transaction and fee.
+
 The exact deterministic acceptance conditions, resource bounds, and known
 limits are documented in
 [`docs/policy-gl-consensus-baseline-3.md`](docs/policy-gl-consensus-baseline-3.md).
@@ -23,6 +30,7 @@ public consensus-path eligibility before `MEETS_BASELINE`.
 - Workbench: <https://equivlab.vercel.app>
 - Network: GenLayer Bradbury (`testnetBradbury`)
 - Registry: `0xab90cA3d5d8E9341c1681475e50343C423AA903f`
+- PROMPT-01 correction contract: `0xd1197fDF969dA07018206ad4A13e8414578D57d7`
 - Pinned fixture commit: `e60cae9cbc15a5f5c95fc27daac658f60c99ea99`
 - Current public release policy: `gl-consensus-baseline-3`. The finalized live
   matrix records the hardened fact checker as `MEETS_BASELINE`, the
@@ -118,16 +126,17 @@ python -m pytest
 Disabling plugin autoload keeps unrelated globally installed pytest plugins
 out of this dependency-free test suite.
 
-Bradbury deployment uses a deterministic schema-preserving compact build to
-stay within the chain's transaction pubdata ceiling:
+The experimental compact registry build retains its Python AST public surface,
+but the current Bradbury schema service rejects it and its gas estimate exceeds
+the network's deployment limit. Do not deploy it as a release artifact:
 
 ```powershell
 python -m pip install -r requirements-deploy.txt
 python tools/build_deployment_contract.py
 ```
 
-The generated file is ignored; [`docs/deployment.md`](docs/deployment.md)
-describes how to record its SHA-256 with the deployed revision.
+The generated file is ignored. [`docs/deployment.md`](docs/deployment.md)
+records the measured limits and the separate PROMPT-01 correction path.
 
 Run the analyzer without installing it:
 

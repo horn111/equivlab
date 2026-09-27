@@ -12,13 +12,40 @@ security guarantee.
 | GenLayer direct-mode suite | `8 passed` on 2026-09-02 | Official GenVM v0.2.16 runner with mocked web responses, including non-contract and missing-consensus outcomes |
 | Frontend unit/integration suite | `29 passed` on 2026-09-02 | Browser-local behavior, mixed `FAIL`/`UNVERIFIABLE` reports, SDK clients, EIP-1193 switching, and wallet/readback lifecycle |
 | Production frontend build | Passed on 2026-09-02 | TypeScript and Vite production compilation |
-| npm dependency audit | `0 vulnerabilities` on 2026-09-02 | Published npm dependency advisories |
+| npm dependency audit | `0 vulnerabilities` on 2026-09-27 | Production audit after locking transitive `js-yaml` to patched 4.3.2; `npm ls` confirmed the override |
 | Impeccable static detector | `0 findings` on 2026-09-02 | Reviewer-facing `web/src` source and style scan |
 | Responsive browser pass | Passed at 1280×720 and 390×844 on 2026-09-02 | Default pinned retrieval, explicit preview mode, one-click non-contract outcome, visible rule-selection evidence, 44px targets, console errors, and horizontal overflow |
 | Production browser E2E | Passed on 2026-09-02 | Baseline-3 pinned fetch → `/api/analyze` 200 → all four local outcomes → exact source-matched registry audits `0`–`3` without wallet; no console errors or framework overlay |
 | Wallet connection browser test | Passed on 2026-08-27 | Simulated injected EIP-1193 provider → account authorization → Bradbury switch fallback → Bradbury network addition; no signature or transaction was simulated |
 | Production accessibility | `0` WCAG A/AA violations on 2026-09-02 | axe-core 4.12.1 after result-region semantics fix; contrast remained incomplete where pseudo-element backgrounds prevented automated calculation |
 | Production API and registry readback | Passed on 2026-09-02 | Production reproduced the pinned baseline-3 commit, registry address, four report hashes, and expected outcome matrix |
+| PROMPT-01 correction tests | `177` Python tests and `40` frontend tests passed on 2026-09-27 | Includes guard-in-helper, misleading marker, validator disagreement, source mismatch, composite provenance, and wallet reconciliation paths; production build passed |
+| Candidate local browser path | Passed on 2026-09-27 | Entered the exact `Siriron/genlayer-intelligent-contracts` revision and `package_linker.py` path in the local workbench; retrieved mode returned `MEETS_BASELINE`, canonical source SHA-256 `681bc806…6bd3b3b4b`, and PROMPT-01 `MEETS_BASELINE`. This local dev server had no registry configuration, so it did not test on-chain UI readback. |
+
+## PROMPT-01 correction release
+
+The base Bradbury registry cannot be changed in place. Its audit `4` of
+`Siriron/genlayer-intelligent-contracts` returns `FAIL` on PROMPT-01; the
+updated local analysis returns `MEETS_BASELINE`. A separate overlay contract
+re-observed the same commit-pinned source through GenLayer consensus and
+recorded `MEETS_BASELINE` for PROMPT-01 only. Its composite report preserves
+the other eleven rule outcomes and binds the base report hash.
+
+| Evidence | Value |
+| --- | --- |
+| Base audit | `4`; original registry report `FAIL`, SHA-256 `15d5b7766e502084e635d781fc44b756a7b4edd5c76b2966d1dac6ef961f4de8` |
+| Pinned source | `Siriron/genlayer-intelligent-contracts`, commit `b117c4d9eb040fd7f1603ddce090a97edeea98f9`, `contracts/updated/package_linker.py` |
+| Canonical source SHA-256 | `681bc80689cc38a73973588f3970a17a211438490e9f551cc33f8746bd3b3b4b` |
+| Overlay contract | `0xd1197fDF969dA07018206ad4A13e8414578D57d7`; readable on-chain code 12,780 bytes, SHA-256 `9425fe3b578da269bcbcbf26af69a38150509ef085af6821d4835e4310ee5dcc` |
+| Overlay deployment | [`0x4946…bca3`](https://explorer-bradbury.genlayer.com/tx/0x494665b18ee1f3fad512350aad3c0ac75110b19686f47a2650ad4ad7f276bca3), `FINALIZED`, `FINISHED_WITH_RETURN` |
+| PROMPT-01 correction | [`0xcfbe…b570`](https://explorer-bradbury.genlayer.com/tx/0xcfbe896112ba1097139ddbda8185f3945a6580b3c65beec63b9808427852b570), `FINALIZED`, `FINISHED_WITH_RETURN` |
+| Composite report | `MEETS_BASELINE`, SHA-256 `1bb0c914734f098a60c47cb7135f8097f0736d785130882f6110ef29fc75ea62`; `get_patch(4)` and `get_report(4)` returned matching source/base identities; the full report hash was recomputed from canonical JSON and matched |
+
+Both transactions were independently checked through GenLayer transaction
+readback. `get_patch(4)` and `get_report(4)` returned the same values when read
+with `LATEST_FINAL`, not merely the default non-final state. The overlay does
+not modify the base registry result. The production browser release is recorded
+separately below after deployment and live readback.
 
 ## Baseline-3 release boundary
 
