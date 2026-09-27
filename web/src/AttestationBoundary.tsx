@@ -27,6 +27,18 @@ const PENDING_KEY = 'equivlab:pending-attestation:v1'
 const ACCEPTED = 'ACCEPTED' as TransactionStatus
 const FINALIZED = 'FINALIZED' as TransactionStatus
 
+function sameRuleOutcomes(local: AuditReport, registry: AuditReport): boolean {
+  return local.status === registry.status
+    && local.severity === registry.severity
+    && (['implemented_rules', 'failed_rules', 'warning_rules', 'unverifiable_rules'] as const).every(
+      (field) => [...local[field]].sort().join('\n') === [...registry[field]].sort().join('\n'),
+    )
+}
+
+function outcomeSummary(report: AuditReport): string {
+  return `${report.status} · ${report.severity}. Rules checked: ${report.implemented_rules.join(', ')}. Failed: ${report.failed_rules.join(', ') || 'none'}. Warnings: ${report.warning_rules.join(', ') || 'none'}. Unverifiable: ${report.unverifiable_rules.join(', ') || 'none'}.`
+}
+
 type LifecycleStage =
   | 'idle'
   | 'connecting'
@@ -355,6 +367,8 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
   const explorerUrl = config && transactionHash ? transactionExplorerUrl(config, transactionHash) : null
   const challengeExplorerUrl = config && challengeTransactionHash ? transactionExplorerUrl(config, challengeTransactionHash) : null
   const currentPosition = stagePosition(stage)
+  const outcomesMatch = readback ? sameRuleOutcomes(report, readback.report) : false
+  const reportHashesMatch = readback?.report.report_sha256 === report.report_sha256
   const busy = existingLookup === 'checking' || ['connecting', 'signing', 'consensus', 'finalizing', 'readback'].includes(stage)
   const authorityCopy = existingLookup === 'checking'
     ? 'Checking this exact source identity against the registry.'
@@ -485,10 +499,24 @@ export default function AttestationBoundary({ analysisLoading, onEditSourceRevis
           </div>
           <dl>
             <div><dt>AUDIT ID</dt><dd>{readback.audit.id}</dd></div>
-            <div><dt>REPORT SHA-256</dt><dd><ExactValue label="Report SHA-256" value={readback.report.report_sha256} onStatus={setAnnouncement} /></dd></div>
+            <div><dt>REGISTRY REPORT SHA-256</dt><dd><ExactValue label="Registry report SHA-256" value={readback.report.report_sha256} onStatus={setAnnouncement} /></dd></div>
             <div><dt>REQUESTER</dt><dd><ExactValue label="Requester address" value={readback.audit.requester} onStatus={setAnnouncement} /></dd></div>
             <div><dt>CHALLENGED</dt><dd>{readback.audit.challenged ? 'YES' : 'NO'}</dd></div>
           </dl>
+          <div className={`report-comparison ${outcomesMatch ? '' : 'report-comparison-different'}`} role={outcomesMatch ? 'note' : 'alert'}>
+            <strong>{!outcomesMatch
+              ? 'Local and registry rule outcomes differ'
+              : reportHashesMatch ? 'Local and registry report hashes match' : 'Rule outcomes match; report hashes differ'}</strong>
+            <p>{!outcomesMatch
+              ? 'These reports cover the same source and policy, but differ in rule coverage, outcomes, or severity. Compare the results before using this audit.'
+              : reportHashesMatch
+                ? 'The local precheck and registry record have the same report fingerprint.'
+                : 'The local precheck and registry produce separate reports. Each SHA-256 covers the full report, including evidence and descriptions. Matching rule outcomes do not require identical report text.'}</p>
+            {!outcomesMatch && <>
+              <p><b>Local:</b> {outcomeSummary(report)}</p>
+              <p><b>Registry:</b> {outcomeSummary(readback.report)}</p>
+            </>}
+          </div>
           {account && (
             <details className="challenge-disclosure">
               <summary>Challenge this registry record</summary>

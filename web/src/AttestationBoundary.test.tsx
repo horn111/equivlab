@@ -129,6 +129,7 @@ describe('attestation lifecycle', () => {
 
     expect(await screen.findByRole('region', { name: /existing registry readback/i })).toBeInTheDocument()
     expect(screen.getByText(/already registered/i)).toBeInTheDocument()
+    expect(screen.getByText('Local and registry report hashes match')).toBeInTheDocument()
     expect(screen.getAllByText(/finalization was not independently checked/i).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /request genlayer review/i })).not.toBeInTheDocument()
     expect(screen.getByText(/to trigger a new review/i)).toBeInTheDocument()
@@ -145,6 +146,35 @@ describe('attestation lifecycle', () => {
       SOURCE_URL,
       report.policy,
     )
+  })
+
+  it('explains different report hashes when the rule outcomes agree regardless of array order', async () => {
+    mocks.readLatestRegistryAudit.mockResolvedValue({
+      ...authoritative,
+      report: { ...report, report_sha256: 'a'.repeat(64), failed_rules: [...report.failed_rules].reverse() },
+    })
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
+
+    expect(await screen.findByText('Rule outcomes match; report hashes differ')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /reveal registry report sha-256/i })).toBeInTheDocument()
+  })
+
+  it.each([
+    { failed_rules: ['AUTH-01'] },
+    { severity: 'HIGH' as const },
+    { implemented_rules: ['AUTH-01'] },
+  ])('warns about differing rule results even when the overall status agrees: %j', async (difference) => {
+    mocks.readLatestRegistryAudit.mockResolvedValue({
+      ...authoritative,
+      report: { ...report, ...difference, report_sha256: 'b'.repeat(64) },
+    })
+    render(<AttestationBoundary analysisLoading={false} report={report} sourceMode="retrieved" onEditSourceRevision={onEditSourceRevision} onUsePinnedSource={onUsePinnedSource} />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Local and registry rule outcomes differ')
+    expect(screen.getByRole('alert')).toHaveTextContent('Local:')
+    expect(screen.getByRole('alert')).toHaveTextContent('Registry:')
+    expect(screen.queryByText('Rule outcomes match; report hashes differ')).not.toBeInTheDocument()
   })
 
   it('uses the typed supersession entrypoint when a prior audit ID is supplied', async () => {

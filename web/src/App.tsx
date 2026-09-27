@@ -976,7 +976,7 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             <span className="policy-chip">{POLICY_ID}</span>
-            <button className="primary-action mobile-analyze-action" onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
+            <button className={`${report ? 'secondary-action' : 'primary-action'} mobile-analyze-action`} onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
               {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
               {loading ? 'Analyzing' : report ? 'Reproduce analysis' : 'Analyze'}
             </button>
@@ -1050,7 +1050,7 @@ export default function App() {
                 <ShieldWarningIcon aria-hidden="true" />
                 <p><strong>{selectedFixture.label}</strong>{selectedFixture.note}</p>
               </div>
-              <button ref={analyzeActionRef} className="primary-action analyze-action" onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
+              <button ref={analyzeActionRef} className={`${report ? 'secondary-action' : 'primary-action'} analyze-action`} onClick={() => void runAnalysis(usePreview)} disabled={loading || !sourceDigest}>
                 {loading ? <SpinnerGapIcon className="spin" /> : <PulseIcon />}
                 {loading ? 'Analyzing revision' : report ? 'Reproduce analysis' : 'Analyze revision'}
                 {!loading && <ArrowRightIcon />}
@@ -1081,20 +1081,20 @@ export default function App() {
             )}
           </section>
 
-          {report && <div
-            className="results-column"
-            id="local-report"
-            role="region"
-            ref={resultSummaryRef}
-            tabIndex={-1}
-            aria-label={`Local analysis result: ${report.status}`}
-          >
-            <div className="review-next-step">
+          {report && <div className="results-column">
+            <div
+              className="review-next-step"
+              id="local-report"
+              role="region"
+              ref={resultSummaryRef}
+              tabIndex={-1}
+              aria-label={`Local analysis result: ${report.status}`}
+            >
               <div>
                 <strong>Local analysis complete</strong>
                 <p>This analysis did not send a transaction. Continue to GenLayer to request a review or check an existing record.</p>
               </div>
-              <button className="secondary-action" onClick={() => {
+              <button className="primary-action" onClick={() => {
                 const heading = document.getElementById('attestation-title')
                 heading?.scrollIntoView({ block: 'start' })
                 heading?.focus({ preventScroll: true })
@@ -1103,20 +1103,18 @@ export default function App() {
               </button>
             </div>
             <RuleSpectrum report={report} activeRule={activeRule} onSelect={selectRule} loading={loading} />
-            <section className="finding-panel" ref={findingPanelRef} aria-label="Selected rule evidence">
-              <FindingReadout finding={activeFinding} activeRule={activeRule} report={report} />
-              {report && (
-                <div className="report-seal">
-                  <div><span>LOCAL REPORT</span><strong>{report.status}</strong></div>
-                  <dl>
-                    <div><dt>SOURCE MODE</dt><dd>{sourceMode?.toUpperCase()}</dd></div>
-                    <div><dt>SEVERITY</dt><dd>{report.severity}</dd></div>
-                    <div><dt>REPORT SHA-256</dt><dd><ExactValue label="Local report SHA-256" value={report.report_sha256} onStatus={setLiveMessage} /></dd></div>
-                  </dl>
-                </div>
-              )}
-            </section>
           </div>}
+          {report && <section className="finding-panel" ref={findingPanelRef} aria-label="Selected rule evidence">
+            <FindingReadout finding={activeFinding} activeRule={activeRule} report={report} />
+            <div className="report-seal">
+              <div><span>LOCAL REPORT</span><strong>{report.status}</strong></div>
+              <dl>
+                <div><dt>SOURCE MODE</dt><dd>{sourceMode?.toUpperCase()}</dd></div>
+                <div><dt>SEVERITY</dt><dd>{report.severity}</dd></div>
+                <div><dt>LOCAL REPORT SHA-256</dt><dd><ExactValue label="Local report SHA-256" value={report.report_sha256} onStatus={setLiveMessage} /></dd></div>
+              </dl>
+            </div>
+          </section>}
         </div>
 
         {report && <p className="scope-statement">
