@@ -21,6 +21,7 @@ security guarantee.
 | Production API and registry readback | Passed on 2026-09-02 | Production reproduced the pinned baseline-3 commit, registry address, four report hashes, and expected outcome matrix |
 | PROMPT-01 correction tests | `177` Python tests and `40` frontend tests passed on 2026-09-27 | Includes guard-in-helper, misleading marker, validator disagreement, source mismatch, composite provenance, and wallet reconciliation paths; production build passed |
 | Candidate local browser path | Passed on 2026-09-27 | Entered the exact `Siriron/genlayer-intelligent-contracts` revision and `package_linker.py` path in the local workbench; retrieved mode returned `MEETS_BASELINE`, canonical source SHA-256 `681bc806…6bd3b3b4b`, and PROMPT-01 `MEETS_BASELINE`. This local dev server had no registry configuration, so it did not test on-chain UI readback. |
+| Production correction readback | Passed on 2026-09-27 | On `equivlab.vercel.app`, retrieved the same pinned revision, ran the production analyzer, then read audit `4` and its finalized PROMPT-01 overlay without connecting a wallet. Local and composite outcomes were `MEETS_BASELINE`; the UI retained the original `FAIL` and displayed composite SHA-256 `1bb0c914…fc75ea62`. No browser warnings or errors were captured. |
 
 ## PROMPT-01 correction release
 
@@ -44,8 +45,15 @@ the other eleven rule outcomes and binds the base report hash.
 Both transactions were independently checked through GenLayer transaction
 readback. `get_patch(4)` and `get_report(4)` returned the same values when read
 with `LATEST_FINAL`, not merely the default non-final state. The overlay does
-not modify the base registry result. The production browser release is recorded
-separately below after deployment and live readback.
+not modify the base registry result.
+
+The correction shipped from commit `a4f8caa5455474bda29de23da27f2d01cb822fd1`
+in Vercel production deployment `dpl_FrQAr5V7v61goAVC5epfq1izz668` (`READY`,
+aliased to <https://equivlab.vercel.app>). The live browser readback matched
+the pinned source hash, original audit ID and report hash, overlay address,
+and composite report hash above. The page correctly states that it did not
+independently check finalization of the original base audit; the correction
+transaction itself was independently verified as finalized.
 
 ## Baseline-3 release boundary
 
@@ -62,12 +70,12 @@ immutable historical evidence.
 | GitHub repository | <https://github.com/horn111/equivlab> |
 | Pinned fixture revision | `e60cae9cbc15a5f5c95fc27daac658f60c99ea99` |
 | Vercel production URL | <https://equivlab.vercel.app> |
-| Vercel deployment | `dpl_6ReHyHa3quJTju6paL2ey526azXV` (`READY`, production) |
+| Initial baseline-3 Vercel deployment | `dpl_6ReHyHa3quJTju6paL2ey526azXV` (`READY`, production at the time) |
 | GenLayer network | `testnetBradbury` |
 | Production registry | `0xab90cA3d5d8E9341c1681475e50343C423AA903f` |
 | Compact deployment source | `34,526` bytes; SHA-256 `31e0625280e4aad25a15ca74aa85bfc3b4ef00c18473a49e10443df27efad5aa`; finalized on-chain code readback matched both values |
 | Registry deployment transaction | [`0x085d…9d13`](https://explorer-bradbury.genlayer.com/tx/0x085d3b4252a669d80ff5cd957710d84fe8721e12ff57e5a41f0fae5ab4eb9d13) (`FINALIZED`, `FINISHED_WITH_RETURN`) |
-| Registry count | `4` finalized baseline-3 audit records |
+| Registry count at initial release | `4` finalized baseline-3 audit records (`0`–`3`); audit `4` was added later |
 | Historical baseline-1 registry | `0xB4818B0269DbA2B8F1F567ecB8c25967F2ba8599` |
 | Edge abuse control | Published Vercel WAF rule: `/api/analyze`, 24 requests per 60 seconds per IP |
 
